@@ -7,19 +7,11 @@ import hashlib
 import shutil
 from datetime import datetime
 
-# === CONFIGURACIÓN DE RUTAS BLINDADA (ANTI REINSTALACIÓN) ===
+# === CONFIGURACIÓN DE RUTAS ===
 STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
 DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
 
-try:
-    public_dir = "/storage/emulated/0/Documents/TuCompraRapida"
-    if not os.path.exists(public_dir):
-        os.makedirs(public_dir)
-    LICENSE_PATH = os.path.join(public_dir, ".tcr_licencia.json")
-except Exception as e:
-    LICENSE_PATH = os.path.join(STORAGE_PATH, ".tcr_licencia.json")
-
-# === SISTEMA DE LICENCIAS ===
+# === SISTEMA DE LICENCIAS (USANDO MEMORIA NATIVA DE ANDROID) ===
 SECRETO = "TuCompraRapida2026"
 DIAS_PRUEBA = 7
 
@@ -30,22 +22,27 @@ def obtener_id_maquina():
 def verificar_licencia(page):
     hoy = datetime.now()
     
-    if not os.path.exists(LICENSE_PATH):
+    # Leemos la licencia desde la memoria interna del teléfono (SharedPreferences)
+    licencia_str = page.client_storage.get("tcr_licencia")
+    
+    if not licencia_str:
+        # Primera vez que abre: creamos la prueba de 7 días
         datos = {"tipo": "prueba", "fecha_inicio": hoy.strftime("%Y-%m-%d"), "ultima_fecha_vista": hoy.strftime("%Y-%m-%d")}
-        with open(LICENSE_PATH, "w") as f: json.dump(datos, f)
+        page.client_storage.set("tcr_licencia", json.dumps(datos))
         return True, "Prueba: 7 días"
         
-    with open(LICENSE_PATH, "r") as f: datos = json.load(f)
+    datos = json.loads(licencia_str)
         
     if datos.get("tipo") == "activa":
         return True, "✅ Licencia Activa"
         
+    # Validación anti-trampa (retroceso de fecha)
     ultima_fecha = datetime.strptime(datos.get("ultima_fecha_vista", datos["fecha_inicio"]), "%Y-%m-%d")
     if hoy < ultima_fecha:
         return False, "❌ Error de fecha"
         
     datos["ultima_fecha_vista"] = hoy.strftime("%Y-%m-%d")
-    with open(LICENSE_PATH, "w") as f: json.dump(datos, f)
+    page.client_storage.set("tcr_licencia", json.dumps(datos))
         
     fecha_inicio = datetime.strptime(datos["fecha_inicio"], "%Y-%m-%d")
     dias = (hoy - fecha_inicio).days
@@ -65,8 +62,10 @@ def mostrar_ventana_activacion(page):
         codigo_esperado = hashlib.sha256(texto_a_encriptar.encode()).hexdigest()[:8].upper()
         
         if codigo_ingresado == codigo_esperado:
+            # Guardamos la licencia activa en la memoria del teléfono
             datos = {"tipo": "activa", "fecha_vencimiento": "2099-12-31"}
-            with open(LICENSE_PATH, "w") as f: json.dump(datos, f)
+            page.client_storage.set("tcr_licencia", json.dumps(datos))
+            
             page.close(dialogo)
             page.open(ft.SnackBar(ft.Text("¡Programa Activado! 🎉"), bgcolor=ft.Colors.GREEN))
             page.controls.clear()
