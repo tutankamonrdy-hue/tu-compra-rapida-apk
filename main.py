@@ -128,6 +128,10 @@ async def main(page: ft.Page):
     prefs = ft.SharedPreferences()
     if prefs not in page.services:
         page.services.append(prefs)
+        
+    clipboard = ft.Clipboard()
+    if clipboard not in page.services:
+        page.services.append(clipboard)
     
     inicializar_bd(page)
     
@@ -147,7 +151,6 @@ async def main(page: ft.Page):
     txt_total_ui = ft.Text("Total: $0.00", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN)
     txt_total_bs_ui = ft.Text("0.00 Bs.", size=16, color=ft.Colors.GREEN)
     
-    # Contenedores para intercambiar vistas
     contenedor_busqueda = ft.Container(visible=False, expand=True)
     contenedor_carrito = ft.Container(visible=True, expand=True)
     
@@ -309,6 +312,53 @@ async def main(page: ft.Page):
         vista_productos
     ], expand=True)
 
+    # === FUNCIÓN COBRAR (CORREGIDA) ===
+    async def cobrar_ticket(e):
+        try:
+            if not lista_carrito:
+                sb = ft.SnackBar(ft.Text("El carrito está vacío"), bgcolor=ft.Colors.RED)
+                page.overlay.append(sb)
+                sb.open = True
+                page.update()
+                return
+                
+            ahora = datetime.now()
+            texto = f"=========================\n🛒 *TU COMPRA RÁPIDA*\n=========================\n📅 _{ahora.strftime('%d/%m/%Y %I:%M %p')}_\nTasa BCV: {tasa_del_dia:.2f} Bs.\n\n *Detalle:* \n"
+            
+            subtotal = 0
+            for item in lista_carrito:
+                sub = item['precio'] * item['cantidad']
+                cant_str = int(item['cantidad']) if float(item['cantidad']).is_integer() else item['cantidad']
+                texto += f"• {cant_str}x {item['nombre']} - ${sub:.2f}\n"
+                subtotal += sub
+                
+            total_bs = subtotal * tasa_del_dia
+            texto += f"\n=========================\n *Total Ref:* ${subtotal:.2f}\n *Total a Pagar:* {total_bs:.2f} Bs.\n=========================\n¡Gracias por tu compra! 🙏✨"
+            
+            # Copiar al portapapeles
+            await clipboard.set(texto)
+            
+            # Guardar en BD
+            conexion = sqlite3.connect(DB_PATH)
+            cursor = conexion.cursor()
+            detalle_str = ", ".join([f"{int(i['cantidad']) if float(i['cantidad']).is_integer() else i['cantidad']}x {i['nombre']}" for i in lista_carrito])
+            cursor.execute("INSERT INTO ventas (total_usd, total_bs, productos_detalles) VALUES (?, ?, ?)", (subtotal, total_bs, detalle_str))
+            conexion.commit()
+            conexion.close()
+            
+            lista_carrito.clear()
+            actualizar_carrito()
+            
+            sb = ft.SnackBar(ft.Text("¡Ticket copiado y venta registrada!"), bgcolor=ft.Colors.GREEN)
+            page.overlay.append(sb)
+            sb.open = True
+            page.update()
+        except Exception as ex:
+            sb = ft.SnackBar(ft.Text(f"Error al cobrar: {ex}"), bgcolor=ft.Colors.RED)
+            page.overlay.append(sb)
+            sb.open = True
+            page.update()
+
     # === VISTA 2: CARRITO DE VENTA ===
     contenedor_carrito.content = ft.Column([
         ft.Row([
@@ -328,7 +378,9 @@ async def main(page: ft.Page):
         ft.Divider(),
         txt_total_ui,
         txt_total_bs_ui,
-        ft.Button("COBRAR Y COPIAR TICKET", on_click=lambda e: cobrar_ticket(e), bgcolor=ft.Colors.GREEN, height=50)
+        
+        # AQUI ESTA EL CAMBIO: on_click=cobrar_ticket SIN EL LAMBDA
+        ft.Button("COBRAR Y COPIAR TICKET", on_click=cobrar_ticket, bgcolor=ft.Colors.GREEN, height=50)
     ], expand=True)
 
     # === LÓGICA DE ALMACÉN ===
@@ -404,44 +456,6 @@ async def main(page: ft.Page):
         dialog.open = True
         page.update()
 
-    async def cobrar_ticket(e):
-        if not lista_carrito:
-            sb = ft.SnackBar(ft.Text("El carrito está vacío"), bgcolor=ft.Colors.RED)
-            page.overlay.append(sb)
-            sb.open = True
-            page.update()
-            return
-            
-        ahora = datetime.now()
-        texto = f"=========================\n🛒 *TU COMPRA RÁPIDA*\n=========================\n📅 _{ahora.strftime('%d/%m/%Y %I:%M %p')}_\nTasa BCV: {tasa_del_dia:.2f} Bs.\n\n *Detalle:* \n"
-        
-        subtotal = 0
-        for item in lista_carrito:
-            sub = item['precio'] * item['cantidad']
-            cant_str = int(item['cantidad']) if float(item['cantidad']).is_integer() else item['cantidad']
-            texto += f"• {cant_str}x {item['nombre']} - ${sub:.2f}\n"
-            subtotal += sub
-            
-        total_bs = subtotal * tasa_del_dia
-        texto += f"\n=========================\n *Total Ref:* ${subtotal:.2f}\n *Total a Pagar:* {total_bs:.2f} Bs.\n=========================\n¡Gracias por tu compra! 🙏✨"
-        
-        await page.clipboard.set(texto)
-        
-        conexion = sqlite3.connect(DB_PATH)
-        cursor = conexion.cursor()
-        detalle_str = ", ".join([f"{int(i['cantidad']) if float(i['cantidad']).is_integer() else i['cantidad']}x {i['nombre']}" for i in lista_carrito])
-        cursor.execute("INSERT INTO ventas (total_usd, total_bs, productos_detalles) VALUES (?, ?, ?)", (subtotal, total_bs, detalle_str))
-        conexion.commit()
-        conexion.close()
-        
-        lista_carrito.clear()
-        actualizar_carrito()
-        
-        sb = ft.SnackBar(ft.Text("¡Ticket copiado y venta registrada!"), bgcolor=ft.Colors.GREEN)
-        page.overlay.append(sb)
-        sb.open = True
-        page.update()
-
     # === PESTAÑA ALMACÉN ===
     vista_almacen = ft.ListView(expand=True, spacing=10)
     tab_almacen = ft.Container(
@@ -511,7 +525,6 @@ async def main(page: ft.Page):
         ft.Column([txt_tasa_ui], alignment=ft.MainAxisAlignment.END)
     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
-    # Contenedor inicial (Carrito + Buscador oculto)
     contenido_principal.content = ft.Column([contenedor_busqueda, contenedor_carrito], expand=True)
     
     page.add(cabecera, contenido_principal, barra_nav)
