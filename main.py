@@ -11,7 +11,7 @@ from datetime import datetime
 STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
 DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
 
-# === SISTEMA DE LICENCIAS (CON SHAREDPREFERENCES) ===
+# === SISTEMA DE LICENCIAS ===
 SECRETO = "TuCompraRapida2026"
 DIAS_PRUEBA = 7
 
@@ -23,7 +23,6 @@ async def verificar_licencia(page):
     hoy = datetime.now()
     prefs = ft.SharedPreferences()
     
-    # En Flet 1.0, los servicios se añaden a page.services
     if prefs not in page.services:
         page.services.append(prefs)
     
@@ -94,7 +93,6 @@ async def mostrar_ventana_activacion(page):
         actions_alignment=ft.MainAxisAlignment.CENTER
     )
     
-    # SOLUCIÓN AL ERROR 'Page' object has no attribute 'open'
     page.overlay.append(dialogo)
     dialogo.open = True
     page.update()
@@ -107,7 +105,7 @@ def inicializar_bd(page):
             if asset_db and os.path.exists(asset_db):
                 shutil.copy(asset_db, DB_PATH)
         except Exception as e:
-            print(f"No se pudo copiar la BD de assets: {e}")
+            print(f"No se pudo copiar la BD: {e}")
 
     conexion = sqlite3.connect(DB_PATH)
     cursor = conexion.cursor()
@@ -120,7 +118,7 @@ def inicializar_bd(page):
     conexion.commit()
     conexion.close()
 
-# === FUNCIÓN PRINCIPAL ASÍNCRONA ===
+# === FUNCIÓN PRINCIPAL ===
 async def main(page: ft.Page):
     page.title = "Tu Compra Rápida"
     page.theme_mode = ft.ThemeMode.DARK
@@ -243,7 +241,7 @@ async def main(page: ft.Page):
         lista_carrito.clear()
         actualizar_carrito()
 
-    def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
+    async def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
         entry_nombre = ft.TextField(label="Nombre del Producto", value=nombre)
         switch_bs = ft.Switch(label="El precio está en Bolívares (Bs)", value=False)
         entry_precio = ft.TextField(label="Precio en $", value=str(precio) if precio else "", keyboard_type=ft.KeyboardType.NUMBER)
@@ -257,7 +255,7 @@ async def main(page: ft.Page):
             
         switch_bs.on_change = cambiar_moneda
 
-        def guardar(e):
+        async def guardar(e):
             try:
                 valor_ingresado = float(entry_precio.value)
                 precio_final_usd = valor_ingresado / tasa_del_dia if switch_bs.value else valor_ingresado
@@ -292,13 +290,12 @@ async def main(page: ft.Page):
             ]
         )
         
-        # SOLUCIÓN AL ERROR 'Page' object has no attribute 'open'
         page.overlay.append(dialog)
         dialog.open = True
         page.update()
 
-    def eliminar_producto(id_p):
-        def confirmar(e):
+    async def eliminar_producto(id_p):
+        async def confirmar(e):
             conexion = sqlite3.connect(DB_PATH)
             cursor = conexion.cursor()
             cursor.execute("UPDATE productos SET estatus='Inactivo' WHERE id=?", (id_p,))
@@ -318,12 +315,11 @@ async def main(page: ft.Page):
             ]
         )
         
-        # SOLUCIÓN AL ERROR 'Page' object has no attribute 'open'
         page.overlay.append(dialog)
         dialog.open = True
         page.update()
 
-    def cobrar_ticket(e):
+    async def cobrar_ticket(e):
         if not lista_carrito:
             sb = ft.SnackBar(ft.Text("El carrito está vacío"), bgcolor=ft.Colors.RED)
             page.overlay.append(sb)
@@ -343,7 +339,8 @@ async def main(page: ft.Page):
         total_bs = subtotal * tasa_del_dia
         texto += f"\n=========================\n *Total Ref:* ${subtotal:.2f}\n *Total a Pagar:* {total_bs:.2f} Bs.\n=========================\n¡Gracias por tu compra! 🙏✨"
         
-        page.set_clipboard(texto)
+        # CORRECCIÓN: Uso de page.clipboard.set con await
+        await page.clipboard.set(texto)
         
         conexion = sqlite3.connect(DB_PATH)
         cursor = conexion.cursor()
@@ -361,7 +358,9 @@ async def main(page: ft.Page):
         page.update()
 
     entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH)
-    vista_productos = ft.ListView(expand=True, spacing=10, padding=10) 
+    
+    # CORRECCIÓN VISUAL: Cambiamos ListView por Column con scroll para que no se aplaste
+    vista_productos = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=10, expand=True) 
     
     tab_vender = ft.Container(
         content=ft.Column([
@@ -383,7 +382,7 @@ async def main(page: ft.Page):
         padding=10
     )
 
-    vista_almacen = ft.ListView(expand=True, spacing=10, padding=10)
+    vista_almacen = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=10, expand=True)
     tab_almacen = ft.Container(
         content=ft.Column([
             ft.Row([
