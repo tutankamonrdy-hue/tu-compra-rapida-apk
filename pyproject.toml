@@ -1,0 +1,11 @@
+[project]
+name = "tu_compra_rapida"
+version = "1.0.0"
+description = "Punto de venta rapido"
+requires-python = ">=3.8"
+
+[tool.flet]
+org = "com.tunombre"
+product = "Tu Compra Rapida"
+company = "TuMercadito"
+copyright = "Copyright (c) 2026 TuMercadito"
