@@ -142,10 +142,16 @@ async def main(page: ft.Page):
     txt_licencia_ui = ft.Text(txt_licencia, color=ft.Colors.YELLOW, weight=ft.FontWeight.BOLD, size=12)
     txt_tasa_ui = ft.Text(f"Tasa: {tasa_del_dia:.2f} Bs.", color=ft.Colors.CYAN, weight=ft.FontWeight.BOLD, size=12)
     
+    # === COMPONENTES DE VISTA ===
     vista_carrito = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=5)
     txt_total_ui = ft.Text("Total: $0.00", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN)
     txt_total_bs_ui = ft.Text("0.00 Bs.", size=16, color=ft.Colors.GREEN)
     
+    # Contenedores para intercambiar vistas
+    contenedor_busqueda = ft.Container(visible=False, expand=True)
+    contenedor_carrito = ft.Container(visible=True, expand=True)
+    
+    # === FUNCIONES DE LÓGICA ===
     def cargar_productos_vista(filtro=""):
         vista_productos.controls.clear()
         conexion = sqlite3.connect(DB_PATH)
@@ -160,7 +166,7 @@ async def main(page: ft.Page):
             vista_productos.controls.append(
                 ft.Button(
                     content=ft.Text(f"{nombre} - ${precio:.2f}", size=16),
-                    on_click=lambda e, i=id_p, n=nombre, p=precio: agregar_al_carrito(i, n, p),
+                    on_click=lambda e, i=id_p, n=nombre, p=precio: abrir_dialogo_cantidad(i, n, p),
                     style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
                     height=50, width=400
                 )
@@ -192,20 +198,68 @@ async def main(page: ft.Page):
         conexion.close()
         page.update()
 
-    def agregar_al_carrito(id_p, nombre, precio):
+    def cambiar_a_busqueda(e):
+        contenedor_carrito.visible = False
+        contenedor_busqueda.visible = True
+        entry_buscador.focus()
+        page.update()
+
+    def cambiar_a_carrito(e):
+        contenedor_busqueda.visible = False
+        contenedor_carrito.visible = True
+        page.update()
+
+    def abrir_dialogo_cantidad(id_p, nombre, precio):
+        entry_cant = ft.TextField(
+            label="Cantidad o Peso (Ej: 1, 0.5)", 
+            value="1", 
+            keyboard_type=ft.KeyboardType.NUMBER,
+            text_align=ft.TextAlign.CENTER
+        )
+        
+        def agregar(e):
+            try:
+                cant = float(entry_cant.value)
+                if cant > 0:
+                    agregar_al_carrito(id_p, nombre, precio, cant)
+                    dialog.open = False
+                    page.update()
+            except ValueError:
+                sb = ft.SnackBar(ft.Text("Por favor, ingrese un número válido"), bgcolor=ft.Colors.RED)
+                page.overlay.append(sb)
+                sb.open = True
+                page.update()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text(f"Agregar: {nombre}"),
+            content=ft.Column([
+                ft.Text(f"Precio por unidad: ${precio:.2f}", size=14, color=ft.Colors.GREY),
+                entry_cant
+            ], tight=True),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
+                ft.Button("Añadir al Carrito", on_click=agregar, bgcolor=ft.Colors.GREEN)
+            ]
+        )
+        
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def agregar_al_carrito(id_p, nombre, precio, cantidad):
         for item in lista_carrito:
             if item["id"] == id_p:
-                item["cantidad"] += 1
+                item["cantidad"] += cantidad
                 actualizar_carrito()
                 return
-        lista_carrito.append({"id": id_p, "nombre": nombre, "precio": precio, "cantidad": 1})
+        lista_carrito.append({"id": id_p, "nombre": nombre, "precio": precio, "cantidad": cantidad})
         actualizar_carrito()
 
     def restar_unidad(id_p):
         for item in lista_carrito:
             if item["id"] == id_p:
                 item["cantidad"] -= 1
-                if item["cantidad"] <= 0:
+                if item["cantidad"] <= 0.01:
                     lista_carrito.remove(item)
                 break
         actualizar_carrito()
@@ -224,11 +278,12 @@ async def main(page: ft.Page):
         
         vista_carrito.controls.clear()
         if not lista_carrito:
-            vista_carrito.controls.append(ft.Text("El carrito está vacío", color=ft.Colors.GREY))
+            vista_carrito.controls.append(ft.Text("El carrito está vacío. Toca '+ Añadir Productos'", color=ft.Colors.GREY))
         else:
             for item in lista_carrito:
+                cant_str = int(item['cantidad']) if float(item['cantidad']).is_integer() else item['cantidad']
                 fila = ft.Row([
-                    ft.Text(f"{item['cantidad']}x {item['nombre']}", expand=True, size=14, weight=ft.FontWeight.BOLD),
+                    ft.Text(f"{cant_str}x {item['nombre']}", expand=True, size=14, weight=ft.FontWeight.BOLD),
                     ft.Text(f"${item['precio'] * item['cantidad']:.2f}", size=14, color=ft.Colors.GREEN),
                     ft.IconButton(ft.Icons.REMOVE_CIRCLE_OUTLINE, icon_color=ft.Colors.ORANGE, on_click=lambda e, i=item['id']: restar_unidad(i), icon_size=20),
                     ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED, on_click=lambda e, i=item['id']: eliminar_del_carrito(i), icon_size=20)
@@ -241,21 +296,54 @@ async def main(page: ft.Page):
         lista_carrito.clear()
         actualizar_carrito()
 
-    async def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
+    # === VISTA 1: BÚSQUEDA DE PRODUCTOS ===
+    entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH)
+    vista_productos = ft.ListView(expand=True, spacing=10)
+    
+    contenedor_busqueda.content = ft.Column([
+        ft.Row([
+            ft.IconButton(ft.Icons.ARROW_BACK, on_click=cambiar_a_carrito, icon_color=ft.Colors.WHITE, tooltip="Volver al Carrito"),
+            ft.Text("Añadir Productos", size=20, weight=ft.FontWeight.BOLD)
+        ]),
+        entry_buscador,
+        vista_productos
+    ], expand=True)
+
+    # === VISTA 2: CARRITO DE VENTA ===
+    contenedor_carrito.content = ft.Column([
+        ft.Row([
+            ft.Text("🛒 Carrito Actual", size=20, weight=ft.FontWeight.BOLD),
+            ft.TextButton("Vaciar Todo", on_click=vaciar_carrito, style=ft.ButtonStyle(color=ft.Colors.RED))
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        
+        ft.Button(
+            "➕ Añadir Productos", 
+            on_click=cambiar_a_busqueda, 
+            bgcolor=ft.Colors.BLUE_700, 
+            icon=ft.Icons.ADD_SHOPPING_CART,
+            height=50
+        ),
+        
+        ft.Container(content=vista_carrito, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=5, padding=10, expand=True),
+        ft.Divider(),
+        txt_total_ui,
+        txt_total_bs_ui,
+        ft.Button("COBRAR Y COPIAR TICKET", on_click=lambda e: cobrar_ticket(e), bgcolor=ft.Colors.GREEN, height=50)
+    ], expand=True)
+
+    # === LÓGICA DE ALMACÉN ===
+    def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
         entry_nombre = ft.TextField(label="Nombre del Producto", value=nombre)
         switch_bs = ft.Switch(label="El precio está en Bolívares (Bs)", value=False)
         entry_precio = ft.TextField(label="Precio en $", value=str(precio) if precio else "", keyboard_type=ft.KeyboardType.NUMBER)
         
         def cambiar_moneda(e):
-            if switch_bs.value:
-                entry_precio.label = "Precio en Bs"
-            else:
-                entry_precio.label = "Precio en $"
+            entry_precio.label = "Precio en Bs" if switch_bs.value else "Precio en $"
             page.update()
             
         switch_bs.on_change = cambiar_moneda
 
-        async def guardar(e):
+        def guardar(e):
             try:
                 valor_ingresado = float(entry_precio.value)
                 precio_final_usd = valor_ingresado / tasa_del_dia if switch_bs.value else valor_ingresado
@@ -270,7 +358,6 @@ async def main(page: ft.Page):
                 
                 conexion.commit()
                 conexion.close()
-                
                 dialog.open = False
                 cargar_productos_almacen()
                 cargar_productos_vista()
@@ -289,13 +376,12 @@ async def main(page: ft.Page):
                 ft.Button("Guardar", on_click=guardar, bgcolor=ft.Colors.GREEN)
             ]
         )
-        
         page.overlay.append(dialog)
         dialog.open = True
         page.update()
 
-    async def eliminar_producto(id_p):
-        async def confirmar(e):
+    def eliminar_producto(id_p):
+        def confirmar(e):
             conexion = sqlite3.connect(DB_PATH)
             cursor = conexion.cursor()
             cursor.execute("UPDATE productos SET estatus='Inactivo' WHERE id=?", (id_p,))
@@ -314,7 +400,6 @@ async def main(page: ft.Page):
                 ft.Button("Eliminar", on_click=confirmar, bgcolor=ft.Colors.RED)
             ]
         )
-        
         page.overlay.append(dialog)
         dialog.open = True
         page.update()
@@ -333,18 +418,18 @@ async def main(page: ft.Page):
         subtotal = 0
         for item in lista_carrito:
             sub = item['precio'] * item['cantidad']
-            texto += f"• {item['cantidad']}x {item['nombre']} - ${sub:.2f}\n"
+            cant_str = int(item['cantidad']) if float(item['cantidad']).is_integer() else item['cantidad']
+            texto += f"• {cant_str}x {item['nombre']} - ${sub:.2f}\n"
             subtotal += sub
             
         total_bs = subtotal * tasa_del_dia
         texto += f"\n=========================\n *Total Ref:* ${subtotal:.2f}\n *Total a Pagar:* {total_bs:.2f} Bs.\n=========================\n¡Gracias por tu compra! 🙏✨"
         
-        # CORRECCIÓN: Uso de page.clipboard.set con await
         await page.clipboard.set(texto)
         
         conexion = sqlite3.connect(DB_PATH)
         cursor = conexion.cursor()
-        detalle_str = ", ".join([f"{i['cantidad']}x {i['nombre']}" for i in lista_carrito])
+        detalle_str = ", ".join([f"{int(i['cantidad']) if float(i['cantidad']).is_integer() else i['cantidad']}x {i['nombre']}" for i in lista_carrito])
         cursor.execute("INSERT INTO ventas (total_usd, total_bs, productos_detalles) VALUES (?, ?, ?)", (subtotal, total_bs, detalle_str))
         conexion.commit()
         conexion.close()
@@ -357,32 +442,8 @@ async def main(page: ft.Page):
         sb.open = True
         page.update()
 
-    entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH)
-    
-    # CORRECCIÓN VISUAL: Cambiamos ListView por Column con scroll para que no se aplaste
-    vista_productos = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=10, expand=True) 
-    
-    tab_vender = ft.Container(
-        content=ft.Column([
-            entry_buscador,
-            vista_productos,
-            ft.Divider(),
-            ft.Container(
-                content=ft.Column([
-                    ft.Row([ft.Text("🛒 Carrito de Venta", weight=ft.FontWeight.BOLD, size=16), ft.TextButton("Vaciar Todo", on_click=vaciar_carrito, style=ft.ButtonStyle(color=ft.Colors.RED))]),
-                    ft.Container(content=vista_carrito, height=150, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=5, padding=5),
-                    ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
-                    txt_total_ui,
-                    txt_total_bs_ui,
-                    ft.Button("COBRAR Y COPIAR TICKET", on_click=cobrar_ticket, bgcolor=ft.Colors.GREEN, height=50)
-                ]),
-                padding=15, bgcolor="#2b2b2b", border_radius=10
-            )
-        ], expand=True),
-        padding=10
-    )
-
-    vista_almacen = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=10, expand=True)
+    # === PESTAÑA ALMACÉN ===
+    vista_almacen = ft.ListView(expand=True, spacing=10)
     tab_almacen = ft.Container(
         content=ft.Column([
             ft.Row([
@@ -394,6 +455,7 @@ async def main(page: ft.Page):
         padding=10
     )
 
+    # === PESTAÑA CIERRE ===
     txt_cierre = ft.Text("Cargando...")
     def cargar_cierre():
         conexion = sqlite3.connect(DB_PATH)
@@ -416,12 +478,15 @@ async def main(page: ft.Page):
         padding=10
     )
 
-    contenido_principal = ft.Container(content=tab_vender, expand=True)
+    # === NAVEGACIÓN PRINCIPAL ===
+    contenido_principal = ft.Container(content=contenedor_carrito, expand=True)
     
     def cambiar_pestana(e):
         idx = e.control.selected_index
         if idx == 0:
-            contenido_principal.content = tab_vender
+            contenido_principal.content = ft.Column([contenedor_busqueda, contenedor_carrito], expand=True)
+            contenedor_busqueda.visible = False
+            contenedor_carrito.visible = True
             cargar_productos_vista()
         elif idx == 1:
             contenido_principal.content = tab_almacen
@@ -446,6 +511,9 @@ async def main(page: ft.Page):
         ft.Column([txt_tasa_ui], alignment=ft.MainAxisAlignment.END)
     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
+    # Contenedor inicial (Carrito + Buscador oculto)
+    contenido_principal.content = ft.Column([contenedor_busqueda, contenedor_carrito], expand=True)
+    
     page.add(cabecera, contenido_principal, barra_nav)
 
     cargar_productos_vista()
