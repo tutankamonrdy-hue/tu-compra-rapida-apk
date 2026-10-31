@@ -11,7 +11,7 @@ from datetime import datetime
 STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
 DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
 
-# === SISTEMA DE LICENCIAS (USANDO MEMORIA NATIVA DE ANDROID) ===
+# === SISTEMA DE LICENCIAS (CON SHAREDPREFERENCES ASÍNCRONO) ===
 SECRETO = "TuCompraRapida2026"
 DIAS_PRUEBA = 7
 
@@ -19,16 +19,18 @@ def obtener_id_maquina():
     id_crudo = str(uuid.getnode())
     return hashlib.md5(id_crudo.encode()).hexdigest()[:8].upper()
 
-def verificar_licencia(page):
+async def verificar_licencia(page):
     hoy = datetime.now()
+    prefs = ft.SharedPreferences()
     
-    # Leemos la licencia desde la memoria interna del teléfono (SharedPreferences)
-    licencia_str = page.client_storage.get("tcr_licencia")
+    if prefs not in page.controls:
+        page.controls.append(prefs)
+    
+    licencia_str = await prefs.get("tcr_licencia")
     
     if not licencia_str:
-        # Primera vez que abre: creamos la prueba de 7 días
         datos = {"tipo": "prueba", "fecha_inicio": hoy.strftime("%Y-%m-%d"), "ultima_fecha_vista": hoy.strftime("%Y-%m-%d")}
-        page.client_storage.set("tcr_licencia", json.dumps(datos))
+        await prefs.set("tcr_licencia", json.dumps(datos))
         return True, "Prueba: 7 días"
         
     datos = json.loads(licencia_str)
@@ -36,13 +38,12 @@ def verificar_licencia(page):
     if datos.get("tipo") == "activa":
         return True, "✅ Licencia Activa"
         
-    # Validación anti-trampa (retroceso de fecha)
     ultima_fecha = datetime.strptime(datos.get("ultima_fecha_vista", datos["fecha_inicio"]), "%Y-%m-%d")
     if hoy < ultima_fecha:
         return False, "❌ Error de fecha"
         
     datos["ultima_fecha_vista"] = hoy.strftime("%Y-%m-%d")
-    page.client_storage.set("tcr_licencia", json.dumps(datos))
+    await prefs.set("tcr_licencia", json.dumps(datos))
         
     fecha_inicio = datetime.strptime(datos["fecha_inicio"], "%Y-%m-%d")
     dias = (hoy - fecha_inicio).days
@@ -52,24 +53,24 @@ def verificar_licencia(page):
         
     return True, f"⏳ Prueba: {DIAS_PRUEBA - dias} días"
 
-def mostrar_ventana_activacion(page):
+async def mostrar_ventana_activacion(page):
     id_maquina = obtener_id_maquina()
     entry_codigo = ft.TextField(label="Código de Activación", text_align=ft.TextAlign.CENTER)
+    prefs = ft.SharedPreferences()
 
-    def activar(e):
+    async def activar(e):
         codigo_ingresado = entry_codigo.value.strip().upper()
         texto_a_encriptar = f"{id_maquina}-{SECRETO}"
         codigo_esperado = hashlib.sha256(texto_a_encriptar.encode()).hexdigest()[:8].upper()
         
         if codigo_ingresado == codigo_esperado:
-            # Guardamos la licencia activa en la memoria del teléfono
             datos = {"tipo": "activa", "fecha_vencimiento": "2099-12-31"}
-            page.client_storage.set("tcr_licencia", json.dumps(datos))
+            await prefs.set("tcr_licencia", json.dumps(datos))
             
             page.close(dialogo)
             page.open(ft.SnackBar(ft.Text("¡Programa Activado! 🎉"), bgcolor=ft.Colors.GREEN))
             page.controls.clear()
-            main(page)
+            await main(page)
             page.update()
         else:
             page.open(ft.SnackBar(ft.Text("Código incorrecto ❌"), bgcolor=ft.Colors.RED))
@@ -91,7 +92,6 @@ def mostrar_ventana_activacion(page):
 
 # === BASE DE DATOS ===
 def inicializar_bd(page):
-    # Si la base de datos no existe en el teléfono, la copiamos de los assets
     if not os.path.exists(DB_PATH):
         try:
             asset_db = page.get_asset_path("inventario.db")
@@ -111,17 +111,21 @@ def inicializar_bd(page):
     conexion.commit()
     conexion.close()
 
-def main(page: ft.Page):
+# === FUNCIÓN PRINCIPAL ASÍNCRONA ===
+async def main(page: ft.Page):
     page.title = "Tu Compra Rápida"
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 10
     page.spacing = 10
     
+    prefs = ft.SharedPreferences()
+    page.add(prefs)
+    
     inicializar_bd(page)
     
-    licencia_ok, txt_licencia = verificar_licencia(page)
+    licencia_ok, txt_licencia = await verificar_licencia(page)
     if not licencia_ok:
-        mostrar_ventana_activacion(page)
+        await mostrar_ventana_activacion(page)
         return
 
     tasa_del_dia = 887.30
@@ -229,20 +233,48 @@ def main(page: ft.Page):
         lista_carrito.clear()
         actualizar_carrito()
 
+    # === DIALOGO DE PRODUCTO CON SELECCIÓN DE MONEDA ===
     def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
         entry_nombre = ft.TextField(label="Nombre del Producto", value=nombre)
+        
+        # Switch para elegir la moneda
+        switch_bs = ft.Switch(label="El precio está en Bolívares (Bs)", value=False)
+        
         entry_precio = ft.TextField(label="Precio en $", value=str(precio) if precio else "", keyboard_type=ft.KeyboardType.NUMBER)
         
+        # Actualizamos la etiqueta dinámicamente según el switch
+        def cambiar_moneda(e):
+            if switch_bs.value:
+                entry_precio.label = "Precio en Bs"
+            else:
+                entry_precio.label = "Precio en $"
+            page.update()
+            
+        switch_bs.on_change = cambiar_moneda
+
         def guardar(e):
             try:
+                valor_ingresado = float(entry_precio.value)
+                
+                # Lógica de conversión
+                if switch_bs.value:
+                    # Si está en Bs, lo dividimos por la tasa para guardarlo en la base de datos
+                    precio_final_usd = valor_ingresado / tasa_del_dia
+                else:
+                    # Si ya está en dólares, se guarda tal cual
+                    precio_final_usd = valor_ingresado
+
                 conexion = sqlite3.connect(DB_PATH)
                 cursor = conexion.cursor()
+                
                 if id_p:
-                    cursor.execute("UPDATE productos SET nombre=?, costo_dolar=? WHERE id=?", (entry_nombre.value, float(entry_precio.value), id_p))
+                    cursor.execute("UPDATE productos SET nombre=?, costo_dolar=? WHERE id=?", (entry_nombre.value, precio_final_usd, id_p))
                 else:
-                    cursor.execute("INSERT INTO productos (nombre, categoria, costo_dolar, estatus, cantidad) VALUES (?, 'General', ?, 'Activo', 0)", (entry_nombre.value, float(entry_precio.value)))
+                    cursor.execute("INSERT INTO productos (nombre, categoria, costo_dolar, estatus, cantidad) VALUES (?, 'General', ?, 'Activo', 0)", (entry_nombre.value, precio_final_usd))
+                
                 conexion.commit()
                 conexion.close()
+                
                 dialog.open = False
                 cargar_productos_almacen()
                 cargar_productos_vista()
@@ -252,7 +284,7 @@ def main(page: ft.Page):
 
         dialog = ft.AlertDialog(
             title=ft.Text("Editar Producto" if id_p else "Nuevo Producto"),
-            content=ft.Column([entry_nombre, entry_precio], tight=True),
+            content=ft.Column([entry_nombre, switch_bs, entry_precio], tight=True),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
                 ft.Button("Guardar", on_click=guardar, bgcolor=ft.Colors.GREEN)
