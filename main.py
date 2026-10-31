@@ -11,7 +11,7 @@ from datetime import datetime
 STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
 DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
 
-# === SISTEMA DE LICENCIAS (CON SHAREDPREFERENCES ASÍNCRONO) ===
+# === SISTEMA DE LICENCIAS (CON SHAREDPREFERENCES) ===
 SECRETO = "TuCompraRapida2026"
 DIAS_PRUEBA = 7
 
@@ -23,8 +23,9 @@ async def verificar_licencia(page):
     hoy = datetime.now()
     prefs = ft.SharedPreferences()
     
-    if prefs not in page.controls:
-        page.controls.append(prefs)
+    # En Flet 1.0, los servicios se añaden a page.services
+    if prefs not in page.services:
+        page.services.append(prefs)
     
     licencia_str = await prefs.get("tcr_licencia")
     
@@ -67,13 +68,17 @@ async def mostrar_ventana_activacion(page):
             datos = {"tipo": "activa", "fecha_vencimiento": "2099-12-31"}
             await prefs.set("tcr_licencia", json.dumps(datos))
             
-            page.close(dialogo)
-            page.open(ft.SnackBar(ft.Text("¡Programa Activado! 🎉"), bgcolor=ft.Colors.GREEN))
+            dialogo.open = False
+            page.update()
+            
             page.controls.clear()
             await main(page)
             page.update()
         else:
-            page.open(ft.SnackBar(ft.Text("Código incorrecto ❌"), bgcolor=ft.Colors.RED))
+            sb = ft.SnackBar(ft.Text("Código incorrecto ❌"), bgcolor=ft.Colors.RED)
+            page.overlay.append(sb)
+            sb.open = True
+            page.update()
 
     dialogo = ft.AlertDialog(
         title=ft.Text("🔒 Activación Requerida", text_align=ft.TextAlign.CENTER),
@@ -88,7 +93,11 @@ async def mostrar_ventana_activacion(page):
         actions=[ft.Button("Activar Programa 🔓", on_click=activar, bgcolor=ft.Colors.GREEN, width=300)],
         actions_alignment=ft.MainAxisAlignment.CENTER
     )
-    page.open(dialogo)
+    
+    # SOLUCIÓN AL ERROR 'Page' object has no attribute 'open'
+    page.overlay.append(dialogo)
+    dialogo.open = True
+    page.update()
 
 # === BASE DE DATOS ===
 def inicializar_bd(page):
@@ -119,7 +128,8 @@ async def main(page: ft.Page):
     page.spacing = 10
     
     prefs = ft.SharedPreferences()
-    page.add(prefs)
+    if prefs not in page.services:
+        page.services.append(prefs)
     
     inicializar_bd(page)
     
@@ -233,16 +243,11 @@ async def main(page: ft.Page):
         lista_carrito.clear()
         actualizar_carrito()
 
-    # === DIALOGO DE PRODUCTO CON SELECCIÓN DE MONEDA ===
     def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
         entry_nombre = ft.TextField(label="Nombre del Producto", value=nombre)
-        
-        # Switch para elegir la moneda
         switch_bs = ft.Switch(label="El precio está en Bolívares (Bs)", value=False)
-        
         entry_precio = ft.TextField(label="Precio en $", value=str(precio) if precio else "", keyboard_type=ft.KeyboardType.NUMBER)
         
-        # Actualizamos la etiqueta dinámicamente según el switch
         def cambiar_moneda(e):
             if switch_bs.value:
                 entry_precio.label = "Precio en Bs"
@@ -255,14 +260,7 @@ async def main(page: ft.Page):
         def guardar(e):
             try:
                 valor_ingresado = float(entry_precio.value)
-                
-                # Lógica de conversión
-                if switch_bs.value:
-                    # Si está en Bs, lo dividimos por la tasa para guardarlo en la base de datos
-                    precio_final_usd = valor_ingresado / tasa_del_dia
-                else:
-                    # Si ya está en dólares, se guarda tal cual
-                    precio_final_usd = valor_ingresado
+                precio_final_usd = valor_ingresado / tasa_del_dia if switch_bs.value else valor_ingresado
 
                 conexion = sqlite3.connect(DB_PATH)
                 cursor = conexion.cursor()
@@ -280,7 +278,10 @@ async def main(page: ft.Page):
                 cargar_productos_vista()
                 page.update()
             except Exception as ex:
-                page.open(ft.SnackBar(ft.Text(f"Error: {ex}"), bgcolor=ft.Colors.RED))
+                sb = ft.SnackBar(ft.Text(f"Error: {ex}"), bgcolor=ft.Colors.RED)
+                page.overlay.append(sb)
+                sb.open = True
+                page.update()
 
         dialog = ft.AlertDialog(
             title=ft.Text("Editar Producto" if id_p else "Nuevo Producto"),
@@ -290,7 +291,11 @@ async def main(page: ft.Page):
                 ft.Button("Guardar", on_click=guardar, bgcolor=ft.Colors.GREEN)
             ]
         )
-        page.open(dialog)
+        
+        # SOLUCIÓN AL ERROR 'Page' object has no attribute 'open'
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
 
     def eliminar_producto(id_p):
         def confirmar(e):
@@ -312,11 +317,18 @@ async def main(page: ft.Page):
                 ft.Button("Eliminar", on_click=confirmar, bgcolor=ft.Colors.RED)
             ]
         )
-        page.open(dialog)
+        
+        # SOLUCIÓN AL ERROR 'Page' object has no attribute 'open'
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
 
     def cobrar_ticket(e):
         if not lista_carrito:
-            page.open(ft.SnackBar(ft.Text("El carrito está vacío"), bgcolor=ft.Colors.RED))
+            sb = ft.SnackBar(ft.Text("El carrito está vacío"), bgcolor=ft.Colors.RED)
+            page.overlay.append(sb)
+            sb.open = True
+            page.update()
             return
             
         ahora = datetime.now()
@@ -342,7 +354,11 @@ async def main(page: ft.Page):
         
         lista_carrito.clear()
         actualizar_carrito()
-        page.open(ft.SnackBar(ft.Text("¡Ticket copiado y venta registrada!"), bgcolor=ft.Colors.GREEN))
+        
+        sb = ft.SnackBar(ft.Text("¡Ticket copiado y venta registrada!"), bgcolor=ft.Colors.GREEN)
+        page.overlay.append(sb)
+        sb.open = True
+        page.update()
 
     entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH)
     vista_productos = ft.ListView(expand=True, spacing=10, padding=10) 
