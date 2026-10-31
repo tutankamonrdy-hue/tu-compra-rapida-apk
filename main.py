@@ -6,10 +6,17 @@ import uuid
 import hashlib
 from datetime import datetime
 
-# === CONFIGURACIÓN DE RUTAS PARA ANDROID ===
+# === CONFIGURACIÓN DE RUTAS BLINDADA (ANTI REINSTALACIÓN) ===
 STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
 DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
-LICENSE_PATH = os.path.join(STORAGE_PATH, ".tcr_licencia.json")
+
+try:
+    public_dir = "/storage/emulated/0/Documents/TuCompraRapida"
+    if not os.path.exists(public_dir):
+        os.makedirs(public_dir)
+    LICENSE_PATH = os.path.join(public_dir, ".tcr_licencia.json")
+except Exception as e:
+    LICENSE_PATH = os.path.join(STORAGE_PATH, ".tcr_licencia.json")
 
 # === SISTEMA DE LICENCIAS ===
 SECRETO = "TuCompraRapida2026"
@@ -19,8 +26,9 @@ def obtener_id_maquina():
     id_crudo = str(uuid.getnode())
     return hashlib.md5(id_crudo.encode()).hexdigest()[:8].upper()
 
-def verificar_licencia():
+def verificar_licencia(page):
     hoy = datetime.now()
+    
     if not os.path.exists(LICENSE_PATH):
         datos = {"tipo": "prueba", "fecha_inicio": hoy.strftime("%Y-%m-%d"), "ultima_fecha_vista": hoy.strftime("%Y-%m-%d")}
         with open(LICENSE_PATH, "w") as f: json.dump(datos, f)
@@ -33,16 +41,53 @@ def verificar_licencia():
         
     ultima_fecha = datetime.strptime(datos.get("ultima_fecha_vista", datos["fecha_inicio"]), "%Y-%m-%d")
     if hoy < ultima_fecha:
-        return False, "❌ Error de fecha (Retroceso detectado)"
+        return False, "❌ Error de fecha"
         
     datos["ultima_fecha_vista"] = hoy.strftime("%Y-%m-%d")
     with open(LICENSE_PATH, "w") as f: json.dump(datos, f)
         
     fecha_inicio = datetime.strptime(datos["fecha_inicio"], "%Y-%m-%d")
     dias = (hoy - fecha_inicio).days
+    
     if dias >= DIAS_PRUEBA:
         return False, "❌ Prueba Vencida"
+        
     return True, f"⏳ Prueba: {DIAS_PRUEBA - dias} días"
+
+def mostrar_ventana_activacion(page):
+    id_maquina = obtener_id_maquina()
+    entry_codigo = ft.TextField(label="Código de Activación", text_align=ft.TextAlign.CENTER)
+
+    def activar(e):
+        codigo_ingresado = entry_codigo.value.strip().upper()
+        texto_a_encriptar = f"{id_maquina}-{SECRETO}"
+        codigo_esperado = hashlib.sha256(texto_a_encriptar.encode()).hexdigest()[:8].upper()
+        
+        if codigo_ingresado == codigo_esperado:
+            datos = {"tipo": "activa", "fecha_vencimiento": "2099-12-31"}
+            with open(LICENSE_PATH, "w") as f: json.dump(datos, f)
+            page.close(dialogo)
+            page.open(ft.SnackBar(ft.Text("¡Programa Activado! 🎉"), bgcolor=ft.Colors.GREEN))
+            page.controls.clear()
+            main(page)
+            page.update()
+        else:
+            page.open(ft.SnackBar(ft.Text("Código incorrecto ❌"), bgcolor=ft.Colors.RED))
+
+    dialogo = ft.AlertDialog(
+        title=ft.Text("🔒 Activación Requerida", text_align=ft.TextAlign.CENTER),
+        content=ft.Column([
+            ft.Text("Su período de prueba ha terminado.\nEnvíe este código a su proveedor:", text_align=ft.TextAlign.CENTER),
+            ft.Container(
+                content=ft.Text(id_maquina, size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN),
+                bgcolor="#2b2b2b", padding=10, border_radius=5, alignment=ft.alignment.center
+            ),
+            entry_codigo
+        ], tight=True),
+        actions=[ft.Button("Activar Programa 🔓", on_click=activar, bgcolor=ft.Colors.GREEN, width=300)],
+        actions_alignment=ft.MainAxisAlignment.CENTER
+    )
+    page.open(dialogo)
 
 # === BASE DE DATOS ===
 def inicializar_bd():
@@ -64,28 +109,22 @@ def main(page: ft.Page):
     page.spacing = 10
     
     inicializar_bd()
-    licencia_ok, txt_licencia = verificar_licencia()
     
+    licencia_ok, txt_licencia = verificar_licencia(page)
     if not licencia_ok:
-        page.add(ft.Text(f"🔒 {txt_licencia}\n\nContacte a su proveedor.", color=ft.Colors.RED, size=20))
-        page.open(ft.AlertDialog(title=ft.Text("Acceso Denegado"), content=ft.Text(f"Por favor active su licencia.\n{txt_licencia}")))
+        mostrar_ventana_activacion(page)
         return
 
-    # === VARIABLES GLOBALES ===
     tasa_del_dia = 887.30
     lista_carrito = []
     
-    # === VARIABLES DE ESTADO ===
     txt_licencia_ui = ft.Text(txt_licencia, color=ft.Colors.YELLOW, weight=ft.FontWeight.BOLD, size=12)
     txt_tasa_ui = ft.Text(f"Tasa: {tasa_del_dia:.2f} Bs.", color=ft.Colors.CYAN, weight=ft.FontWeight.BOLD, size=12)
     
-    # Lista visual del carrito
-    vista_carrito = ft.ListView(expand=True, spacing=5)
-    
+    vista_carrito = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=5)
     txt_total_ui = ft.Text("Total: $0.00", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN)
     txt_total_bs_ui = ft.Text("0.00 Bs.", size=16, color=ft.Colors.GREEN)
     
-    # === FUNCIONES DE LA BASE DE DATOS ===
     def cargar_productos_vista(filtro=""):
         vista_productos.controls.clear()
         conexion = sqlite3.connect(DB_PATH)
@@ -98,15 +137,11 @@ def main(page: ft.Page):
         for prod in cursor.fetchall():
             id_p, nombre, precio = prod
             vista_productos.controls.append(
-                ft.ElevatedButton(
-                    text=f"{nombre} - ${precio:.2f}",
+                ft.Button(
+                    content=ft.Text(f"{nombre} - ${precio:.2f}", size=16),
                     on_click=lambda e, i=id_p, n=nombre, p=precio: agregar_al_carrito(i, n, p),
-                    style=ft.ButtonStyle(
-                        bgcolor=ft.Colors.BLUE_700, 
-                        color=ft.Colors.WHITE,
-                        shape=ft.RoundedRectangleBorder(radius=10)
-                    ),
-                    height=50
+                    style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+                    height=50, width=400
                 )
             )
         conexion.close()
@@ -136,7 +171,6 @@ def main(page: ft.Page):
         conexion.close()
         page.update()
 
-    # === FUNCIONES DEL CARRITO ===
     def agregar_al_carrito(id_p, nombre, precio):
         for item in lista_carrito:
             if item["id"] == id_p:
@@ -172,13 +206,12 @@ def main(page: ft.Page):
             vista_carrito.controls.append(ft.Text("El carrito está vacío", color=ft.Colors.GREY))
         else:
             for item in lista_carrito:
-                # Fila para cada producto en el carrito
                 fila = ft.Row([
-                    ft.Text(f"{item['cantidad']}x {item['nombre']}", expand=True),
-                    ft.Text(f"${item['precio'] * item['cantidad']:.2f}", weight=ft.FontWeight.BOLD),
+                    ft.Text(f"{item['cantidad']}x {item['nombre']}", expand=True, size=14, weight=ft.FontWeight.BOLD),
+                    ft.Text(f"${item['precio'] * item['cantidad']:.2f}", size=14, color=ft.Colors.GREEN),
                     ft.IconButton(ft.Icons.REMOVE_CIRCLE_OUTLINE, icon_color=ft.Colors.ORANGE, on_click=lambda e, i=item['id']: restar_unidad(i), icon_size=20),
                     ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED, on_click=lambda e, i=item['id']: eliminar_del_carrito(i), icon_size=20)
-                ])
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
                 vista_carrito.controls.append(fila)
         
         page.update()
@@ -187,21 +220,18 @@ def main(page: ft.Page):
         lista_carrito.clear()
         actualizar_carrito()
 
-    # === DIÁLOGOS DE ALMACÉN ===
     def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
         entry_nombre = ft.TextField(label="Nombre del Producto", value=nombre)
-        entry_precio = ft.TextField(label="Precio en $ (Dólares)", value=str(precio) if precio else "", keyboard_type=ft.KeyboardType.NUMBER)
+        entry_precio = ft.TextField(label="Precio en $", value=str(precio) if precio else "", keyboard_type=ft.KeyboardType.NUMBER)
         
         def guardar(e):
             try:
                 conexion = sqlite3.connect(DB_PATH)
                 cursor = conexion.cursor()
                 if id_p:
-                    cursor.execute("UPDATE productos SET nombre=?, costo_dolar=? WHERE id=?", 
-                                   (entry_nombre.value, float(entry_precio.value), id_p))
+                    cursor.execute("UPDATE productos SET nombre=?, costo_dolar=? WHERE id=?", (entry_nombre.value, float(entry_precio.value), id_p))
                 else:
-                    cursor.execute("INSERT INTO productos (nombre, categoria, costo_dolar, estatus, cantidad) VALUES (?, 'General', ?, 'Activo', 0)", 
-                                   (entry_nombre.value, float(entry_precio.value)))
+                    cursor.execute("INSERT INTO productos (nombre, categoria, costo_dolar, estatus, cantidad) VALUES (?, 'General', ?, 'Activo', 0)", (entry_nombre.value, float(entry_precio.value)))
                 conexion.commit()
                 conexion.close()
                 dialog.open = False
@@ -216,7 +246,7 @@ def main(page: ft.Page):
             content=ft.Column([entry_nombre, entry_precio], tight=True),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
-                ft.ElevatedButton("Guardar", on_click=guardar, bgcolor=ft.Colors.GREEN)
+                ft.Button("Guardar", on_click=guardar, bgcolor=ft.Colors.GREEN)
             ]
         )
         page.open(dialog)
@@ -238,12 +268,11 @@ def main(page: ft.Page):
             content=ft.Text("El producto ya no aparecerá en la lista de ventas."),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
-                ft.ElevatedButton("Eliminar", on_click=confirmar, bgcolor=ft.Colors.RED)
+                ft.Button("Eliminar", on_click=confirmar, bgcolor=ft.Colors.RED)
             ]
         )
         page.open(dialog)
 
-    # === PROCESAR VENTA Y COPIAR ===
     def cobrar_ticket(e):
         if not lista_carrito:
             page.open(ft.SnackBar(ft.Text("El carrito está vacío"), bgcolor=ft.Colors.RED))
@@ -274,9 +303,6 @@ def main(page: ft.Page):
         actualizar_carrito()
         page.open(ft.SnackBar(ft.Text("¡Ticket copiado y venta registrada!"), bgcolor=ft.Colors.GREEN))
 
-    # === ESTRUCTURA VISUAL ===
-    
-    # Pestaña 1: Vender
     entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH)
     vista_productos = ft.ListView(expand=True, spacing=10, padding=10) 
     
@@ -287,32 +313,31 @@ def main(page: ft.Page):
             ft.Divider(),
             ft.Container(
                 content=ft.Column([
-                    ft.Row([ft.Text("Carrito", weight=ft.FontWeight.BOLD), ft.TextButton("Vaciar Todo", on_click=vaciar_carrito)]),
-                    vista_carrito, # Aquí mostramos la lista con los botones de restar y quitar
+                    ft.Row([ft.Text("🛒 Carrito de Venta", weight=ft.FontWeight.BOLD, size=16), ft.TextButton("Vaciar Todo", on_click=vaciar_carrito, style=ft.ButtonStyle(color=ft.Colors.RED))]),
+                    ft.Container(content=vista_carrito, height=150, border=ft.border.all(1, ft.Colors.GREY_700), border_radius=5, padding=5),
+                    ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
                     txt_total_ui,
                     txt_total_bs_ui,
-                    ft.ElevatedButton("COBRAR Y COPIAR TICKET", on_click=cobrar_ticket, bgcolor=ft.Colors.GREEN, width=400)
-                ], expand=True),
-                padding=10, bgcolor="#2b2b2b", border_radius=10, expand=True
+                    ft.Button("COBRAR Y COPIAR TICKET", on_click=cobrar_ticket, bgcolor=ft.Colors.GREEN, height=50)
+                ]),
+                padding=15, bgcolor="#2b2b2b", border_radius=10
             )
         ], expand=True),
         padding=10
     )
 
-    # Pestaña 2: Almacén
     vista_almacen = ft.ListView(expand=True, spacing=10, padding=10)
     tab_almacen = ft.Container(
         content=ft.Column([
             ft.Row([
                 ft.Text("Inventario", size=20, weight=ft.FontWeight.BOLD),
-                ft.ElevatedButton("Añadir +", on_click=lambda e: abrir_dialogo_producto(), bgcolor=ft.Colors.BLUE)
+                ft.Button("Añadir +", on_click=lambda e: abrir_dialogo_producto(), bgcolor=ft.Colors.BLUE)
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             vista_almacen
         ], expand=True),
         padding=10
     )
 
-    # Pestaña 3: Cierre
     txt_cierre = ft.Text("Cargando...")
     def cargar_cierre():
         conexion = sqlite3.connect(DB_PATH)
@@ -330,12 +355,11 @@ def main(page: ft.Page):
         content=ft.Column([
             ft.Text("Cierre de Caja Diario", size=20, weight=ft.FontWeight.BOLD),
             txt_cierre,
-            ft.ElevatedButton("Actualizar Datos", on_click=lambda e: cargar_cierre(), bgcolor=ft.Colors.BLUE)
+            ft.Button("Actualizar Datos", on_click=lambda e: cargar_cierre(), bgcolor=ft.Colors.BLUE)
         ]),
         padding=10
     )
 
-    # Barra de Navegación Inferior
     contenido_principal = ft.Container(content=tab_vender, expand=True)
     
     def cambiar_pestana(e):
@@ -361,21 +385,15 @@ def main(page: ft.Page):
         on_change=cambiar_pestana
     )
 
-    # Cabecera
     cabecera = ft.Row([
         ft.Column([ft.Text("Tu Compra Rápida", size=18, weight=ft.FontWeight.BOLD), txt_licencia_ui]),
         ft.Column([txt_tasa_ui], alignment=ft.MainAxisAlignment.END)
     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
-    page.add(
-        cabecera,
-        contenido_principal,
-        barra_nav
-    )
+    page.add(cabecera, contenido_principal, barra_nav)
 
-    # Cargar datos iniciales
     cargar_productos_vista()
     actualizar_carrito()
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.run(main) # <--- ESTA ES LA LÍNEA CLAVE PARA QUE FUNCIONE EN ANDROID
