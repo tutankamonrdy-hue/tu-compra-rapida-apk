@@ -4,6 +4,7 @@ import os
 import json
 import uuid
 import hashlib
+import shutil
 from datetime import datetime
 
 # === CONFIGURACIÓN DE RUTAS BLINDADA (ANTI REINSTALACIÓN) ===
@@ -80,7 +81,7 @@ def mostrar_ventana_activacion(page):
             ft.Text("Su período de prueba ha terminado.\nEnvíe este código a su proveedor:", text_align=ft.TextAlign.CENTER),
             ft.Container(
                 content=ft.Text(id_maquina, size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN),
-                bgcolor="#2b2b2b", padding=10, border_radius=5, alignment=ft.alignment.center
+                bgcolor="#2b2b2b", padding=10, border_radius=5, alignment=ft.Alignment(0, 0)
             ),
             entry_codigo
         ], tight=True),
@@ -90,7 +91,16 @@ def mostrar_ventana_activacion(page):
     page.open(dialogo)
 
 # === BASE DE DATOS ===
-def inicializar_bd():
+def inicializar_bd(page):
+    # Si la base de datos no existe en el teléfono, la copiamos de los assets
+    if not os.path.exists(DB_PATH):
+        try:
+            asset_db = page.get_asset_path("inventario.db")
+            if asset_db and os.path.exists(asset_db):
+                shutil.copy(asset_db, DB_PATH)
+        except Exception as e:
+            print(f"No se pudo copiar la BD de assets: {e}")
+
     conexion = sqlite3.connect(DB_PATH)
     cursor = conexion.cursor()
     cursor.execute("""CREATE TABLE IF NOT EXISTS productos (
@@ -108,7 +118,7 @@ def main(page: ft.Page):
     page.padding = 10
     page.spacing = 10
     
-    inicializar_bd()
+    inicializar_bd(page)
     
     licencia_ok, txt_licencia = verificar_licencia(page)
     if not licencia_ok:
@@ -165,7 +175,7 @@ def main(page: ft.Page):
                         ft.IconButton(ft.Icons.EDIT, icon_color=ft.Colors.BLUE, on_click=lambda e, i=id_p, n=nombre, p=precio: abrir_dialogo_producto(i, n, p)),
                         ft.IconButton(ft.Icons.DELETE, icon_color=ft.Colors.RED, on_click=lambda e, i=id_p: eliminar_producto(i))
                     ]),
-                    padding=10, border=ft.border.all(1, ft.Colors.GREY_800), border_radius=10
+                    padding=10, border=ft.Border.all(1, ft.Colors.GREY_800), border_radius=10
                 )
             )
         conexion.close()
@@ -314,7 +324,7 @@ def main(page: ft.Page):
             ft.Container(
                 content=ft.Column([
                     ft.Row([ft.Text("🛒 Carrito de Venta", weight=ft.FontWeight.BOLD, size=16), ft.TextButton("Vaciar Todo", on_click=vaciar_carrito, style=ft.ButtonStyle(color=ft.Colors.RED))]),
-                    ft.Container(content=vista_carrito, height=150, border=ft.border.all(1, ft.Colors.GREY_700), border_radius=5, padding=5),
+                    ft.Container(content=vista_carrito, height=150, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=5, padding=5),
                     ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
                     txt_total_ui,
                     txt_total_bs_ui,
@@ -396,4 +406,4 @@ def main(page: ft.Page):
     actualizar_carrito()
 
 if __name__ == "__main__":
-    ft.run(main) # <--- ESTA ES LA LÍNEA CLAVE PARA QUE FUNCIONE EN ANDROID
+    ft.run(main)
