@@ -13,10 +13,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Flet
-        run: pip install flet
+      - name: Install Flet and Dependencies
+        run: pip install flet requests beautifulsoup4
 
-           - name: Build APK
+      - name: Build APK
         run: echo "y" | flet build apk --arch arm64-v8a
 
       - name: Upload APK
