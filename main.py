@@ -2,23 +2,44 @@ import flet as ft
 import sqlite3
 import os
 import json
-import uuid
 import hashlib
 import shutil
+import requests
+import threading
+import uuid
+from bs4 import BeautifulSoup
 from datetime import datetime
 
 # === CONFIGURACIÓN DE RUTAS ===
 STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
 DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
 
-# === SISTEMA DE LICENCIAS ===
+# === VARIABLES GLOBALES ===
+tasa_del_dia = 887.30
 SECRETO = "TuCompraRapida2026"
-DIAS_PRUEBA = 7
+DIAS_PRUEBA = 2 # Prueba de 2 días
 
-def obtener_id_maquina():
-    id_crudo = str(uuid.getnode())
-    return hashlib.md5(id_crudo.encode()).hexdigest()[:8].upper()
+# === TASA BCV AUTOMÁTICA ===
+def obtener_tasa_bcv(page, txt_tasa_ui):
+    global tasa_del_dia
+    url = "https://bcv.org.ve"
+    try:
+        respuesta = requests.get(url, verify=False, timeout=5)
+        if respuesta.status_code == 200:
+            soup = BeautifulSoup(respuesta.text, 'html.parser')
+            contenedor_dolar = soup.find('div', id='dolar')
+            if contenedor_dolar:
+                precio_texto = contenedor_dolar.find('strong').text.strip()
+                tasa_del_dia = float(precio_texto.replace(',', '.'))
+                txt_tasa_ui.value = f"Tasa: {tasa_del_dia:.2f} Bs."
+                page.update()
+    except:
+        pass 
 
+def actualizar_tasa_en_hilo(page, txt_tasa_ui):
+    threading.Thread(target=obtener_tasa_bcv, args=(page, txt_tasa_ui), daemon=True).start()
+
+# === SISTEMA DE LICENCIAS (CÓDIGO CORTO) ===
 async def verificar_licencia(page):
     hoy = datetime.now()
     prefs = ft.SharedPreferences()
@@ -29,42 +50,50 @@ async def verificar_licencia(page):
     licencia_str = await prefs.get("tcr_licencia")
     
     if not licencia_str:
-        datos = {"tipo": "prueba", "fecha_inicio": hoy.strftime("%Y-%m-%d"), "ultima_fecha_vista": hoy.strftime("%Y-%m-%d")}
+        # Genera un código único y corto: 3 bloques de 4 letras/números (Ej: A1B2-C3D4-E5F6)
+        codigo_id = f"{uuid.uuid4().hex[:4].upper()}-{uuid.uuid4().hex[:4].upper()}-{uuid.uuid4().hex[:4].upper()}"
+        fecha_inicio = hoy.strftime("%Y-%m-%d")
+        
+        datos = {"tipo": "prueba", "codigo_id": codigo_id, "fecha_inicio": fecha_inicio, "ultima_fecha_vista": fecha_inicio}
         await prefs.set("tcr_licencia", json.dumps(datos))
-        return True, "Prueba: 7 días"
+        return True, f"Prueba: {DIAS_PRUEBA} días", codigo_id
         
     datos = json.loads(licencia_str)
+    codigo_id = datos.get("codigo_id", "ERROR")
         
     if datos.get("tipo") == "activa":
-        return True, "✅ Licencia Activa"
+        return True, "✅ Licencia Activa", codigo_id
         
-    ultima_fecha = datetime.strptime(datos.get("ultima_fecha_vista", datos["fecha_inicio"]), "%Y-%m-%d")
+    # Validación anti-trampa (retroceso de fecha)
+    ultima_fecha = datetime.strptime(datos.get("ultima_fecha_vista"), "%Y-%m-%d")
     if hoy < ultima_fecha:
-        return False, "❌ Error de fecha"
+        return False, "❌ Error de fecha", codigo_id
         
     datos["ultima_fecha_vista"] = hoy.strftime("%Y-%m-%d")
     await prefs.set("tcr_licencia", json.dumps(datos))
         
-    fecha_inicio = datetime.strptime(datos["fecha_inicio"], "%Y-%m-%d")
-    dias = (hoy - fecha_inicio).days
+    fecha_inicio_dt = datetime.strptime(datos["fecha_inicio"], "%Y-%m-%d")
+    dias = (hoy - fecha_inicio_dt).days
     
     if dias >= DIAS_PRUEBA:
-        return False, "❌ Prueba Vencida"
+        return False, "❌ Prueba Vencida", codigo_id
         
-    return True, f"⏳ Prueba: {DIAS_PRUEBA - dias} días"
+    return True, f"⏳ Prueba: {DIAS_PRUEBA - dias} días", codigo_id
 
-async def mostrar_ventana_activacion(page):
-    id_maquina = obtener_id_maquina()
-    entry_codigo = ft.TextField(label="Código de Activación", text_align=ft.TextAlign.CENTER)
+async def mostrar_ventana_activacion(page, codigo_id):
+    entry_codigo = ft.TextField(label="Código de Activación (8 letras)", text_align=ft.TextAlign.CENTER)
     prefs = ft.SharedPreferences()
 
     async def activar(e):
         codigo_ingresado = entry_codigo.value.strip().upper()
-        texto_a_encriptar = f"{id_maquina}-{SECRETO}"
+        # Quitamos guiones por si el cliente los pone por error
+        codigo_id_limpio = codigo_id.replace("-", "")
+        
+        texto_a_encriptar = f"{codigo_id_limpio}-{SECRETO}"
         codigo_esperado = hashlib.sha256(texto_a_encriptar.encode()).hexdigest()[:8].upper()
         
         if codigo_ingresado == codigo_esperado:
-            datos = {"tipo": "activa", "fecha_vencimiento": "2099-12-31"}
+            datos = {"tipo": "activa", "codigo_id": codigo_id, "fecha_inicio": datetime.now().strftime("%Y-%m-%d"), "ultima_fecha_vista": datetime.now().strftime("%Y-%m-%d")}
             await prefs.set("tcr_licencia", json.dumps(datos))
             
             dialogo.open = False
@@ -82,10 +111,10 @@ async def mostrar_ventana_activacion(page):
     dialogo = ft.AlertDialog(
         title=ft.Text("🔒 Activación Requerida", text_align=ft.TextAlign.CENTER),
         content=ft.Column([
-            ft.Text("Su período de prueba ha terminado.\nEnvíe este código a su proveedor:", text_align=ft.TextAlign.CENTER),
+            ft.Text("Su período de prueba ha terminado.\nEnvíe este Código de Serie a su proveedor:", text_align=ft.TextAlign.CENTER),
             ft.Container(
-                content=ft.Text(id_maquina, size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN),
-                bgcolor="#2b2b2b", padding=10, border_radius=5, alignment=ft.Alignment(0, 0)
+                content=ft.Text(codigo_id, size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN),
+                bgcolor="#2b2b2b", padding=15, border_radius=5, alignment=ft.Alignment(0, 0)
             ),
             entry_codigo
         ], tight=True),
@@ -104,8 +133,8 @@ def inicializar_bd(page):
             asset_db = page.get_asset_path("inventario.db")
             if asset_db and os.path.exists(asset_db):
                 shutil.copy(asset_db, DB_PATH)
-        except Exception as e:
-            print(f"No se pudo copiar la BD: {e}")
+        except:
+            pass
 
     conexion = sqlite3.connect(DB_PATH)
     cursor = conexion.cursor()
@@ -120,6 +149,7 @@ def inicializar_bd(page):
 
 # === FUNCIÓN PRINCIPAL ===
 async def main(page: ft.Page):
+    global tasa_del_dia
     page.title = "Tu Compra Rápida"
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 10
@@ -135,18 +165,41 @@ async def main(page: ft.Page):
     
     inicializar_bd(page)
     
-    licencia_ok, txt_licencia = await verificar_licencia(page)
+    licencia_ok, txt_licencia, codigo_id = await verificar_licencia(page)
     if not licencia_ok:
-        await mostrar_ventana_activacion(page)
+        await mostrar_ventana_activacion(page, codigo_id)
         return
 
-    tasa_del_dia = 887.30
     lista_carrito = []
     
     txt_licencia_ui = ft.Text(txt_licencia, color=ft.Colors.YELLOW, weight=ft.FontWeight.BOLD, size=12)
     txt_tasa_ui = ft.Text(f"Tasa: {tasa_del_dia:.2f} Bs.", color=ft.Colors.CYAN, weight=ft.FontWeight.BOLD, size=12)
     
-    # === COMPONENTES DE VISTA ===
+    def abrir_dialogo_tasa(e):
+        entry_tasa = ft.TextField(label="Nueva Tasa BCV", value=str(tasa_del_dia), keyboard_type=ft.KeyboardType.NUMBER)
+        
+        def guardar_tasa(e):
+            global tasa_del_dia
+            try:
+                tasa_del_dia = float(entry_tasa.value)
+                txt_tasa_ui.value = f"Tasa: {tasa_del_dia:.2f} Bs."
+                dialog.open = False
+                page.update()
+            except:
+                pass
+                
+        dialog = ft.AlertDialog(
+            title=ft.Text("Tasa Manual"),
+            content=ft.Column([entry_tasa], tight=True),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
+                ft.Button("Guardar", on_click=guardar_tasa, bgcolor=ft.Colors.GREEN)
+            ]
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
     vista_carrito = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=5)
     txt_total_ui = ft.Text("Total: $0.00", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN)
     txt_total_bs_ui = ft.Text("0.00 Bs.", size=16, color=ft.Colors.GREEN)
@@ -154,7 +207,6 @@ async def main(page: ft.Page):
     contenedor_busqueda = ft.Container(visible=False, expand=True)
     contenedor_carrito = ft.Container(visible=True, expand=True)
     
-    # === FUNCIONES DE LÓGICA ===
     def cargar_productos_vista(filtro=""):
         vista_productos.controls.clear()
         conexion = sqlite3.connect(DB_PATH)
@@ -169,7 +221,7 @@ async def main(page: ft.Page):
             vista_productos.controls.append(
                 ft.Button(
                     content=ft.Text(f"{nombre} - ${precio:.2f}", size=16),
-                    on_click=lambda e, i=id_p, n=nombre, p=precio: abrir_dialogo_cantidad(i, n, p),
+                    on_click=lambda e, i=id_p, n=nombre, p=precio: agregar_al_carrito(i, n, p, 1),
                     style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
                     height=50, width=400
                 )
@@ -212,39 +264,28 @@ async def main(page: ft.Page):
         contenedor_carrito.visible = True
         page.update()
 
-    def abrir_dialogo_cantidad(id_p, nombre, precio):
-        entry_cant = ft.TextField(
-            label="Cantidad o Peso (Ej: 1, 0.5)", 
-            value="1", 
-            keyboard_type=ft.KeyboardType.NUMBER,
-            text_align=ft.TextAlign.CENTER
-        )
+    def abrir_dialogo_monto_bs(e):
+        entry_monto = ft.TextField(label="Monto en Bs", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.CENTER)
         
-        def agregar(e):
+        def agregar_monto(e):
             try:
-                cant = float(entry_cant.value)
-                if cant > 0:
-                    agregar_al_carrito(id_p, nombre, precio, cant)
+                monto_bs = float(entry_monto.value)
+                if monto_bs > 0:
+                    precio_usd = monto_bs / tasa_del_dia
+                    agregar_al_carrito("libre_bs", f"Venta Libre ({monto_bs:.0f} Bs)", precio_usd, 1)
                     dialog.open = False
                     page.update()
-            except ValueError:
-                sb = ft.SnackBar(ft.Text("Por favor, ingrese un número válido"), bgcolor=ft.Colors.RED)
-                page.overlay.append(sb)
-                sb.open = True
-                page.update()
+            except:
+                pass
 
         dialog = ft.AlertDialog(
-            title=ft.Text(f"Agregar: {nombre}"),
-            content=ft.Column([
-                ft.Text(f"Precio por unidad: ${precio:.2f}", size=14, color=ft.Colors.GREY),
-                entry_cant
-            ], tight=True),
+            title=ft.Text("Monto de Venta (Bs)"),
+            content=ft.Column([ft.Text("Ingresa el monto total en Bolívares:"), entry_monto], tight=True),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
-                ft.Button("Añadir al Carrito", on_click=agregar, bgcolor=ft.Colors.GREEN)
+                ft.Button("Añadir al Carrito", on_click=agregar_monto, bgcolor=ft.Colors.GREEN)
             ]
         )
-        
         page.overlay.append(dialog)
         dialog.open = True
         page.update()
@@ -299,20 +340,18 @@ async def main(page: ft.Page):
         lista_carrito.clear()
         actualizar_carrito()
 
-    # === VISTA 1: BÚSQUEDA DE PRODUCTOS ===
     entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH)
     vista_productos = ft.ListView(expand=True, spacing=10)
     
     contenedor_busqueda.content = ft.Column([
         ft.Row([
-            ft.IconButton(ft.Icons.ARROW_BACK, on_click=cambiar_a_carrito, icon_color=ft.Colors.WHITE, tooltip="Volver al Carrito"),
+            ft.IconButton(ft.Icons.ARROW_BACK, on_click=cambiar_a_carrito, icon_color=ft.Colors.WHITE),
             ft.Text("Añadir Productos", size=20, weight=ft.FontWeight.BOLD)
         ]),
         entry_buscador,
         vista_productos
     ], expand=True)
 
-    # === FUNCIÓN COBRAR (CORREGIDA) ===
     async def cobrar_ticket(e):
         try:
             if not lista_carrito:
@@ -335,10 +374,8 @@ async def main(page: ft.Page):
             total_bs = subtotal * tasa_del_dia
             texto += f"\n=========================\n *Total Ref:* ${subtotal:.2f}\n *Total a Pagar:* {total_bs:.2f} Bs.\n=========================\n¡Gracias por tu compra! 🙏✨"
             
-            # Copiar al portapapeles
             await clipboard.set(texto)
             
-            # Guardar en BD
             conexion = sqlite3.connect(DB_PATH)
             cursor = conexion.cursor()
             detalle_str = ", ".join([f"{int(i['cantidad']) if float(i['cantidad']).is_integer() else i['cantidad']}x {i['nombre']}" for i in lista_carrito])
@@ -354,36 +391,29 @@ async def main(page: ft.Page):
             sb.open = True
             page.update()
         except Exception as ex:
-            sb = ft.SnackBar(ft.Text(f"Error al cobrar: {ex}"), bgcolor=ft.Colors.RED)
+            sb = ft.SnackBar(ft.Text(f"Error: {ex}"), bgcolor=ft.Colors.RED)
             page.overlay.append(sb)
             sb.open = True
             page.update()
 
-    # === VISTA 2: CARRITO DE VENTA ===
     contenedor_carrito.content = ft.Column([
         ft.Row([
             ft.Text("🛒 Carrito Actual", size=20, weight=ft.FontWeight.BOLD),
             ft.TextButton("Vaciar Todo", on_click=vaciar_carrito, style=ft.ButtonStyle(color=ft.Colors.RED))
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         
-        ft.Button(
-            "➕ Añadir Productos", 
-            on_click=cambiar_a_busqueda, 
-            bgcolor=ft.Colors.BLUE_700, 
-            icon=ft.Icons.ADD_SHOPPING_CART,
-            height=50
-        ),
+        ft.Row([
+            ft.Button("➕ Añadir", on_click=cambiar_a_busqueda, bgcolor=ft.Colors.BLUE_700, icon=ft.Icons.ADD_SHOPPING_CART, height=50, expand=True),
+            ft.Button("💵 Monto en Bs", on_click=abrir_dialogo_monto_bs, bgcolor=ft.Colors.ORANGE_700, height=50, expand=True)
+        ]),
         
         ft.Container(content=vista_carrito, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=5, padding=10, expand=True),
         ft.Divider(),
         txt_total_ui,
         txt_total_bs_ui,
-        
-        # AQUI ESTA EL CAMBIO: on_click=cobrar_ticket SIN EL LAMBDA
         ft.Button("COBRAR Y COPIAR TICKET", on_click=cobrar_ticket, bgcolor=ft.Colors.GREEN, height=50)
     ], expand=True)
 
-    # === LÓGICA DE ALMACÉN ===
     def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
         entry_nombre = ft.TextField(label="Nombre del Producto", value=nombre)
         switch_bs = ft.Switch(label="El precio está en Bolívares (Bs)", value=False)
@@ -414,11 +444,8 @@ async def main(page: ft.Page):
                 cargar_productos_almacen()
                 cargar_productos_vista()
                 page.update()
-            except Exception as ex:
-                sb = ft.SnackBar(ft.Text(f"Error: {ex}"), bgcolor=ft.Colors.RED)
-                page.overlay.append(sb)
-                sb.open = True
-                page.update()
+            except:
+                pass
 
         dialog = ft.AlertDialog(
             title=ft.Text("Editar Producto" if id_p else "Nuevo Producto"),
@@ -456,7 +483,6 @@ async def main(page: ft.Page):
         dialog.open = True
         page.update()
 
-    # === PESTAÑA ALMACÉN ===
     vista_almacen = ft.ListView(expand=True, spacing=10)
     tab_almacen = ft.Container(
         content=ft.Column([
@@ -469,7 +495,6 @@ async def main(page: ft.Page):
         padding=10
     )
 
-    # === PESTAÑA CIERRE ===
     txt_cierre = ft.Text("Cargando...")
     def cargar_cierre():
         conexion = sqlite3.connect(DB_PATH)
@@ -492,7 +517,6 @@ async def main(page: ft.Page):
         padding=10
     )
 
-    # === NAVEGACIÓN PRINCIPAL ===
     contenido_principal = ft.Container(content=contenedor_carrito, expand=True)
     
     def cambiar_pestana(e):
@@ -520,9 +544,18 @@ async def main(page: ft.Page):
         on_change=cambiar_pestana
     )
 
+    btn_editar_tasa = ft.IconButton(ft.Icons.EDIT, icon_color=ft.Colors.ORANGE, tooltip="Cambiar Tasa Manual", on_click=abrir_dialogo_tasa)
+    btn_activar_manual = ft.IconButton(ft.Icons.KEY, icon_color=ft.Colors.AMBER, tooltip="Activar Licencia", on_click=lambda e: page.run_task(mostrar_ventana_activacion, page, codigo_id))
+
     cabecera = ft.Row([
-        ft.Column([ft.Text("Tu Compra Rápida", size=18, weight=ft.FontWeight.BOLD), txt_licencia_ui]),
-        ft.Column([txt_tasa_ui], alignment=ft.MainAxisAlignment.END)
+        ft.Column([
+            ft.Text("Tu Compra Rápida", size=18, weight=ft.FontWeight.BOLD), 
+            ft.Row([txt_licencia_ui, btn_activar_manual], spacing=5)
+        ]),
+        ft.Row([
+            txt_tasa_ui,
+            btn_editar_tasa
+        ], spacing=2)
     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
     contenido_principal.content = ft.Column([contenedor_busqueda, contenedor_carrito], expand=True)
@@ -531,6 +564,7 @@ async def main(page: ft.Page):
 
     cargar_productos_vista()
     actualizar_carrito()
+    actualizar_tasa_en_hilo(page, txt_tasa_ui)
 
 if __name__ == "__main__":
     ft.run(main)
