@@ -3,6 +3,11 @@ name = "tu_compra_rapida"
 version = "1.0.0"
 description = "Punto de venta rapido"
 requires-python = ">=3.8"
+dependencies = [
+    "flet",
+    "requests",
+    "beautifulsoup4"
+]
 
 [tool.flet]
 org = "com.tunombre"
