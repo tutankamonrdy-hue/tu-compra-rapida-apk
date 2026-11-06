@@ -17,7 +17,7 @@ DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
 # === VARIABLES GLOBALES ===
 tasa_del_dia = 887.30
 SECRETO = "TuCompraRapida2026"
-DIAS_PRUEBA = 2 # Prueba de 2 días
+DIAS_PRUEBA = 2
 
 # === TASA BCV AUTOMÁTICA ===
 def obtener_tasa_bcv(page, txt_tasa_ui):
@@ -39,7 +39,7 @@ def obtener_tasa_bcv(page, txt_tasa_ui):
 def actualizar_tasa_en_hilo(page, txt_tasa_ui):
     threading.Thread(target=obtener_tasa_bcv, args=(page, txt_tasa_ui), daemon=True).start()
 
-# === SISTEMA DE LICENCIAS (CÓDIGO CORTO) ===
+# === SISTEMA DE LICENCIAS ===
 async def verificar_licencia(page):
     hoy = datetime.now()
     prefs = ft.SharedPreferences()
@@ -50,10 +50,8 @@ async def verificar_licencia(page):
     licencia_str = await prefs.get("tcr_licencia")
     
     if not licencia_str:
-        # Genera un código único y corto: 3 bloques de 4 letras/números (Ej: A1B2-C3D4-E5F6)
         codigo_id = f"{uuid.uuid4().hex[:4].upper()}-{uuid.uuid4().hex[:4].upper()}-{uuid.uuid4().hex[:4].upper()}"
         fecha_inicio = hoy.strftime("%Y-%m-%d")
-        
         datos = {"tipo": "prueba", "codigo_id": codigo_id, "fecha_inicio": fecha_inicio, "ultima_fecha_vista": fecha_inicio}
         await prefs.set("tcr_licencia", json.dumps(datos))
         return True, f"Prueba: {DIAS_PRUEBA} días", codigo_id
@@ -64,7 +62,6 @@ async def verificar_licencia(page):
     if datos.get("tipo") == "activa":
         return True, "✅ Licencia Activa", codigo_id
         
-    # Validación anti-trampa (retroceso de fecha)
     ultima_fecha = datetime.strptime(datos.get("ultima_fecha_vista"), "%Y-%m-%d")
     if hoy < ultima_fecha:
         return False, "❌ Error de fecha", codigo_id
@@ -86,9 +83,7 @@ async def mostrar_ventana_activacion(page, codigo_id):
 
     async def activar(e):
         codigo_ingresado = entry_codigo.value.strip().upper()
-        # Quitamos guiones por si el cliente los pone por error
         codigo_id_limpio = codigo_id.replace("-", "")
-        
         texto_a_encriptar = f"{codigo_id_limpio}-{SECRETO}"
         codigo_esperado = hashlib.sha256(texto_a_encriptar.encode()).hexdigest()[:8].upper()
         
@@ -171,6 +166,7 @@ async def main(page: ft.Page):
         return
 
     lista_carrito = []
+    diccionario_badges = {} # Para guardar los contadores rojos visuales
     
     txt_licencia_ui = ft.Text(txt_licencia, color=ft.Colors.YELLOW, weight=ft.FontWeight.BOLD, size=12)
     txt_tasa_ui = ft.Text(f"Tasa: {tasa_del_dia:.2f} Bs.", color=ft.Colors.CYAN, weight=ft.FontWeight.BOLD, size=12)
@@ -207,8 +203,24 @@ async def main(page: ft.Page):
     contenedor_busqueda = ft.Container(visible=False, expand=True)
     contenedor_carrito = ft.Container(visible=True, expand=True)
     
+    def actualizar_badge(id_p):
+        if str(id_p) in diccionario_badges:
+            cont_badge, lbl_badge = diccionario_badges[str(id_p)]
+            cant = 0
+            for item in lista_carrito:
+                if str(item["id"]) == str(id_p):
+                    cant = item["cantidad"]
+                    break
+            if cant > 0:
+                lbl_badge.value = str(int(cant)) if float(cant).is_integer() else str(cant)
+                cont_badge.visible = True
+            else:
+                cont_badge.visible = False
+
     def cargar_productos_vista(filtro=""):
         vista_productos.controls.clear()
+        diccionario_badges.clear()
+        
         conexion = sqlite3.connect(DB_PATH)
         cursor = conexion.cursor()
         if filtro:
@@ -218,14 +230,40 @@ async def main(page: ft.Page):
         
         for prod in cursor.fetchall():
             id_p, nombre, precio = prod
-            vista_productos.controls.append(
-                ft.Button(
-                    content=ft.Text(f"{nombre} - ${precio:.2f}", size=16),
-                    on_click=lambda e, i=id_p, n=nombre, p=precio: agregar_al_carrito(i, n, p, 1),
-                    style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
-                    height=50, width=400
-                )
+            
+            # Buscar si ya está en el carrito para mostrar el número inicial
+            cant_actual = 0
+            for item in lista_carrito:
+                if str(item["id"]) == str(id_p):
+                    cant_actual = item["cantidad"]
+                    break
+            
+            # Creamos el pequeño circulito rojo con el número
+            lbl_badge = ft.Text(str(int(cant_actual)) if cant_actual > 0 else "", color=ft.Colors.WHITE, size=12, weight=ft.FontWeight.BOLD)
+            cont_badge = ft.Container(
+                content=lbl_badge,
+                bgcolor=ft.Colors.RED,
+                width=25, height=25,
+                border_radius=12.5,
+                alignment=ft.Alignment(0, 0),
+                right=5, top=-5, 
+                visible=(cant_actual > 0)
             )
+            
+            # El botón normal
+            btn = ft.Button(
+                content=ft.Text(f"{nombre} - ${precio:.2f}", size=16),
+                on_click=lambda e, i=id_p, n=nombre, p=precio: agregar_al_carrito(i, n, p, 1),
+                style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+                height=50, width=400
+            )
+            
+            # Los apilamos (botón abajo, circulito arriba a la derecha)
+            stack = ft.Stack([btn, cont_badge], width=400, height=50)
+            
+            diccionario_badges[str(id_p)] = (cont_badge, lbl_badge)
+            vista_productos.controls.append(stack)
+            
         conexion.close()
         page.update()
 
@@ -294,9 +332,11 @@ async def main(page: ft.Page):
         for item in lista_carrito:
             if item["id"] == id_p:
                 item["cantidad"] += cantidad
+                actualizar_badge(id_p)
                 actualizar_carrito()
                 return
         lista_carrito.append({"id": id_p, "nombre": nombre, "precio": precio, "cantidad": cantidad})
+        actualizar_badge(id_p)
         actualizar_carrito()
 
     def restar_unidad(id_p):
@@ -306,6 +346,7 @@ async def main(page: ft.Page):
                 if item["cantidad"] <= 0.01:
                     lista_carrito.remove(item)
                 break
+        actualizar_badge(id_p)
         actualizar_carrito()
 
     def eliminar_del_carrito(id_p):
@@ -313,6 +354,7 @@ async def main(page: ft.Page):
             if item["id"] == id_p:
                 lista_carrito.remove(item)
                 break
+        actualizar_badge(id_p)
         actualizar_carrito()
 
     def actualizar_carrito():
@@ -338,10 +380,13 @@ async def main(page: ft.Page):
 
     def vaciar_carrito(e):
         lista_carrito.clear()
+        # Ocultar todos los badges
+        for id_p in diccionario_badges:
+            actualizar_badge(id_p)
         actualizar_carrito()
 
     entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH)
-    vista_productos = ft.ListView(expand=True, spacing=10)
+    vista_productos = ft.ListView(expand=True, spacing=15)
     
     contenedor_busqueda.content = ft.Column([
         ft.Row([
@@ -384,6 +429,8 @@ async def main(page: ft.Page):
             conexion.close()
             
             lista_carrito.clear()
+            for id_p in diccionario_badges:
+                actualizar_badge(id_p)
             actualizar_carrito()
             
             sb = ft.SnackBar(ft.Text("¡Ticket copiado y venta registrada!"), bgcolor=ft.Colors.GREEN)
