@@ -778,6 +778,7 @@ async def main(page: ft.Page):
             btn_editar_tasa
         ], spacing=2)
     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN) 
+    
 
     contenido_principal.content = ft.Column([contenedor_busqueda, contenedor_carrito], expand=True)
     
