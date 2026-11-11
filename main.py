@@ -28,9 +28,17 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 # === TASA BCV AUTOMÁTICA ROBUSTA ===
 def obtener_tasa_bcv(page, txt_tasa_ui):
     global tasa_del_dia
+    
+    def show_loading():
+        txt_tasa_ui.value = "Tasa: Buscando..."
+        page.update()
+    try:
+        page.run_thread(show_loading)
+    except:
+        show_loading()
+
     nueva_tasa = None
     
-    # INTENTO 1: Página oficial del BCV
     try:
         print("Conectando al BCV...")
         url_bcv = "https://bcv.org.ve"
@@ -47,12 +55,11 @@ def obtener_tasa_bcv(page, txt_tasa_ui):
     except Exception as e:
         print(f"Fallo BCV (intentando Plan B): {e}")
 
-    # INTENTO 2 (PLAN B): API Alternativa
     if nueva_tasa is None:
         try:
             print("Intentando Plan B (DolarAPI)...")
             url_api = "https://ve.dolarapi.com/v1/dolares/oficial"
-            respuesta_api = requests.get(url_api, timeout=10)
+            respuesta_api = requests.get(url_api, verify=False, timeout=10)
             if respuesta_api.status_code == 200:
                 datos = respuesta_api.json()
                 if "promedio" in datos and datos["promedio"] is not None:
@@ -66,16 +73,17 @@ def obtener_tasa_bcv(page, txt_tasa_ui):
             tasa_del_dia = nueva_tasa
         
         def update_ui():
-            if txt_tasa_ui:
-                txt_tasa_ui.value = f"Tasa: {nueva_tasa:.2f} Bs."
-                page.update()
+            txt_tasa_ui.value = f"Tasa: {nueva_tasa:.2f} Bs."
+            page.update()
         
         try:
             page.run_thread(update_ui)
         except Exception:
             update_ui()
+            
     else:
         def mostrar_error():
+            txt_tasa_ui.value = f"Tasa: {tasa_del_dia:.2f} Bs."
             sb = ft.SnackBar(ft.Text("No se pudo actualizar la tasa. Verifica tu internet."), bgcolor=ft.Colors.ORANGE)
             page.overlay.append(sb)
             sb.open = True
@@ -388,7 +396,6 @@ async def main(page: ft.Page):
                 monto_bs = float(entry_monto.value)
                 if monto_bs > 0:
                     precio_usd = monto_bs / tasa_del_dia
-                    # ID ÚNICO PARA CADA VENTA LIBRE
                     id_unico = f"libre_{uuid.uuid4().hex[:6]}"
                     agregar_al_carrito(id_unico, f"Venta Libre ({monto_bs:.0f} Bs)", precio_usd, 1)
                     dialog.open = False
@@ -628,7 +635,7 @@ async def main(page: ft.Page):
     # === LÓGICA Y DISEÑO DEL CIERRE DE CAJA ===
     txt_cierre = ft.Text("Cargando...")
     
-    def cargar_cierre():
+    def cargar_cierre(e=None):
         conexion = sqlite3.connect(DB_PATH)
         cursor = conexion.cursor()
         fecha_busqueda = datetime.now().strftime("%Y-%m-%d")
@@ -641,7 +648,14 @@ async def main(page: ft.Page):
         txt_cierre.value = f"Ventas de hoy: {len(ventas)}\n\nTotal Recaudado: ${t_usd:.2f}\nTotal Bs: {t_bs:.2f} Bs."
         page.update()
 
-    def copiar_cierre(e):
+        # Aviso visual para que el usuario sepa que el botón funcionó
+        if e is not None: # Solo mostrar el aviso si se presionó el botón, no si se cargó automático
+            sb = ft.SnackBar(ft.Text("Datos del cierre actualizados"), bgcolor=ft.Colors.BLUE_700)
+            page.overlay.append(sb)
+            sb.open = True
+            page.update()
+
+    async def copiar_cierre(e):
         conexion = sqlite3.connect(DB_PATH)
         cursor = conexion.cursor()
         fecha_busqueda = datetime.now().strftime("%Y-%m-%d")
@@ -667,7 +681,8 @@ async def main(page: ft.Page):
 
         texto += f"\n=========================\n💰 TOTAL VENTAS: {len(ventas)}\n🟢 Total Ref: ${t_usd:.2f}\n🔵 Total Bs: {t_bs:.2f} Bs.\n=========================\n"
 
-        page.set_clipboard(texto)
+        await clipboard.set(texto)
+        
         sb = ft.SnackBar(ft.Text("¡Cierre copiado al portapapeles!"), bgcolor=ft.Colors.GREEN)
         page.overlay.append(sb)
         sb.open = True
@@ -705,7 +720,7 @@ async def main(page: ft.Page):
             ft.Text("Cierre de Caja Diario", size=20, weight=ft.FontWeight.BOLD),
             txt_cierre,
             ft.Row([
-                ft.Button("Actualizar", on_click=lambda e: cargar_cierre(), bgcolor=ft.Colors.BLUE),
+                ft.Button("Actualizar", on_click=cargar_cierre, bgcolor=ft.Colors.BLUE),
                 ft.Button("Copiar Cierre", on_click=copiar_cierre, bgcolor=ft.Colors.GREEN),
                 ft.Button("Reiniciar Día", on_click=reiniciar_dia, bgcolor=ft.Colors.RED)
             ], alignment=ft.MainAxisAlignment.CENTER, wrap=True)
