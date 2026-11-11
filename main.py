@@ -719,6 +719,7 @@ async def main(page: ft.Page):
         dialog.open = True
         page.update()
 
+    # CORRECCIÓN AQUÍ: Quitamos padding=10 del Column
     tab_cierre = ft.Container(
         content=ft.Column([
             ft.Text("Cierre de Caja Diario", size=22, weight=ft.FontWeight.BOLD),
@@ -728,7 +729,7 @@ async def main(page: ft.Page):
                 ft.Button("Copiar Cierre", on_click=copiar_cierre, bgcolor=ft.Colors.GREEN_700),
                 ft.Button("Reiniciar Día", on_click=reiniciar_dia, bgcolor=ft.Colors.RED_700)
             ], alignment=ft.MainAxisAlignment.CENTER, wrap=True)
-        ], spacing=20, padding=10),
+        ], spacing=20), # <--- AQUÍ SE QUITÓ EL PADDING
         padding=10
     )
 
@@ -762,6 +763,7 @@ async def main(page: ft.Page):
     btn_editar_tasa = ft.IconButton(ft.Icons.EDIT, icon_color=ft.Colors.ORANGE_400, tooltip="Cambiar Tasa Manual", on_click=abrir_dialogo_tasa)
     btn_activar_manual = ft.IconButton(ft.Icons.KEY, icon_color=ft.Colors.AMBER_400, tooltip="Activar Licencia", on_click=lambda e: page.run_task(mostrar_ventana_activacion, page, codigo_id))
 
+    # CORRECCIÓN AQUÍ: Quitamos padding=10 del Row
     cabecera = ft.Row([
         ft.Column([
             ft.Text("Tu Compra Rápida", size=20, weight=ft.FontWeight.BOLD), 
@@ -771,7 +773,7 @@ async def main(page: ft.Page):
             txt_tasa_ui,
             btn_editar_tasa
         ], spacing=2)
-    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, padding=10)
+    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN) # <--- AQUÍ SE QUITÓ EL PADDING
 
     contenido_principal.content = ft.Column([contenedor_busqueda, contenedor_carrito], expand=True)
     
