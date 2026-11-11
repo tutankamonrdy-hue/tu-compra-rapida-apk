@@ -18,12 +18,19 @@ STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
 DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
 
 # === VARIABLES GLOBALES ===
-tasa_del_dia = 887.30  
+tasa_del_dia = 887.30 
 SECRETO = "TuCompraRapida2026"
 DIAS_PRUEBA = 2
 tasa_lock = threading.Lock()
 
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
+# === FUENTE PERSONALIZADA (Google Fonts) ===
+def cargar_fuente(page):
+    page.fonts = {
+        "Roboto": "https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff2"
+    }
+    page.theme.font_family = "Roboto"
 
 # === TASA BCV AUTOMÁTICA ROBUSTA ===
 def obtener_tasa_bcv(page, txt_tasa_ui):
@@ -80,11 +87,10 @@ def obtener_tasa_bcv(page, txt_tasa_ui):
             page.run_thread(update_ui)
         except Exception:
             update_ui()
-            
     else:
         def mostrar_error():
             txt_tasa_ui.value = f"Tasa: {tasa_del_dia:.2f} Bs."
-            sb = ft.SnackBar(ft.Text("No se pudo actualizar la tasa. Verifica tu internet."), bgcolor=ft.Colors.ORANGE)
+            sb = ft.SnackBar(ft.Text("No se pudo actualizar la tasa. Verifica tu internet."), bgcolor=ft.Colors.ORANGE_700)
             page.overlay.append(sb)
             sb.open = True
             page.update()
@@ -155,7 +161,9 @@ async def mostrar_ventana_activacion(page, codigo_id):
     entry_codigo = ft.TextField(
         label="Código de Activación (8 caracteres)", 
         text_align=ft.TextAlign.CENTER, 
-        autofocus=True
+        autofocus=True,
+        border_color=ft.Colors.BLUE_500,
+        focused_border_color=ft.Colors.BLUE_700
     )
     
     prefs = ft.SharedPreferences()
@@ -185,29 +193,30 @@ async def mostrar_ventana_activacion(page, codigo_id):
                 print(f"Error recargando main: {ex}")
             page.update()
         else:
-            sb = ft.SnackBar(ft.Text("Código incorrecto ❌"), bgcolor=ft.Colors.RED)
+            sb = ft.SnackBar(ft.Text("Código incorrecto ❌"), bgcolor=ft.Colors.RED_700)
             page.overlay.append(sb)
             sb.open = True
             page.update()
 
     dialogo = ft.AlertDialog(
-        title=ft.Text("🔒 Activación Requerida", text_align=ft.TextAlign.CENTER),
+        title=ft.Text("🔒 Activación Requerida", text_align=ft.TextAlign.CENTER, weight=ft.FontWeight.BOLD),
         content=ft.Column([
-            ft.Text("Envíe este código a su proveedor:", text_align=ft.TextAlign.CENTER, size=12),
+            ft.Text("Envíe este código a su proveedor:", text_align=ft.TextAlign.CENTER, size=12, color=ft.Colors.GREY_400),
             ft.Container(
                 content=ft.Text(codigo_id, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN),
-                bgcolor="#2b2b2b", padding=10, border_radius=5, alignment=ft.Alignment(0, 0)
+                bgcolor="#2b2b2b", padding=15, border_radius=8, alignment=ft.Alignment(0, 0),
+                border=ft.Border.all(1, ft.Colors.GREY_600)
             ),
             entry_codigo,
             ft.Row([
-                ft.ElevatedButton("Activar", on_click=activar),
+                ft.Button("Activar", on_click=activar, bgcolor=ft.Colors.BLUE_700),
                 ft.OutlinedButton("Cancelar", on_click=lambda e: (setattr(dialogo, 'open', False), page.update()))
-            ], alignment=ft.MainAxisAlignment.END)
-        ], spacing=15, width=300), 
+            ], alignment=ft.MainAxisAlignment.END, spacing=10)
+        ], spacing=20, width=320), 
         actions_alignment=ft.MainAxisAlignment.CENTER
     )
     
-    page.dialog = dialogo
+    page.overlay.append(dialogo)
     dialogo.open = True
     page.update()
 
@@ -238,8 +247,10 @@ async def main(page: ft.Page):
     global tasa_del_dia
     page.title = "Tu Compra Rápida"
     page.theme_mode = ft.ThemeMode.DARK
-    page.padding = 10
+    page.padding = ft.padding.all(10)
     page.spacing = 10
+    
+    cargar_fuente(page)
     
     prefs = ft.SharedPreferences()
     if prefs not in page.services:
@@ -259,8 +270,8 @@ async def main(page: ft.Page):
     lista_carrito = []
     diccionario_badges = {}
     
-    txt_licencia_ui = ft.Text(txt_licencia, color=ft.Colors.YELLOW, weight=ft.FontWeight.BOLD, size=12)
-    txt_tasa_ui = ft.Text(f"Tasa: {tasa_del_dia:.2f} Bs.", color=ft.Colors.CYAN, weight=ft.FontWeight.BOLD, size=12)
+    txt_licencia_ui = ft.Text(txt_licencia, color=ft.Colors.YELLOW_700, weight=ft.FontWeight.W_500, size=12)
+    txt_tasa_ui = ft.Text(f"Tasa: {tasa_del_dia:.2f} Bs.", color=ft.Colors.CYAN_300, weight=ft.FontWeight.BOLD, size=14)
     
     def abrir_dialogo_tasa(e):
         entry_tasa = ft.TextField(label="Nueva Tasa BCV", value=str(tasa_del_dia), keyboard_type=ft.KeyboardType.NUMBER)
@@ -276,20 +287,20 @@ async def main(page: ft.Page):
                 pass
                 
         dialog = ft.AlertDialog(
-            title=ft.Text("Tasa Manual"),
+            title=ft.Text("Tasa Manual", weight=ft.FontWeight.BOLD),
             content=ft.Column([entry_tasa], tight=True),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
-                ft.Button("Guardar", on_click=guardar_tasa, bgcolor=ft.Colors.GREEN)
+                ft.Button("Guardar", on_click=guardar_tasa, bgcolor=ft.Colors.GREEN_700)
             ]
         )
         page.overlay.append(dialog)
         dialog.open = True
         page.update()
 
-    vista_carrito = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=5)
-    txt_total_ui = ft.Text("Total: $0.00", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN)
-    txt_total_bs_ui = ft.Text("0.00 Bs.", size=16, color=ft.Colors.GREEN)
+    vista_carrito = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=8)
+    txt_total_ui = ft.Text("Total: $0.00", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_400)
+    txt_total_bs_ui = ft.Text("0.00 Bs.", size=18, color=ft.Colors.GREEN_400)
     
     contenedor_busqueda = ft.Container(visible=False, expand=True)
     contenedor_carrito = ft.Container(visible=True, expand=True)
@@ -331,9 +342,9 @@ async def main(page: ft.Page):
             lbl_badge = ft.Text(str(int(cant_actual)) if cant_actual > 0 else "", color=ft.Colors.WHITE, size=12, weight=ft.FontWeight.BOLD)
             cont_badge = ft.Container(
                 content=lbl_badge,
-                bgcolor=ft.Colors.RED,
-                width=25, height=25,
-                border_radius=12.5,
+                bgcolor=ft.Colors.RED_700,
+                width=24, height=24,
+                border_radius=12,
                 alignment=ft.Alignment(0, 0),
                 right=5, top=-5, 
                 visible=(cant_actual > 0)
@@ -342,11 +353,11 @@ async def main(page: ft.Page):
             btn = ft.Button(
                 content=ft.Text(f"{nombre} - ${precio:.2f}", size=16),
                 on_click=lambda e, i=id_p, n=nombre, p=precio: agregar_al_carrito(i, n, p, 1),
-                style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
-                height=50, width=400
+                style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, shape=ft.RoundedRectangleBorder(radius=8)),
+                height=55, width=400
             )
             
-            stack = ft.Stack([btn, cont_badge], width=400, height=50)
+            stack = ft.Stack([btn, cont_badge], width=400, height=55)
             diccionario_badges[str(id_p)] = (cont_badge, lbl_badge)
             vista_productos.controls.append(stack)
             
@@ -366,12 +377,14 @@ async def main(page: ft.Page):
                     content=ft.Row([
                         ft.Column([
                             ft.Text(nombre, weight=ft.FontWeight.BOLD),
-                            ft.Text(f"${precio:.2f}", size=14, color=ft.Colors.GREEN)
+                            ft.Text(f"${precio:.2f}", size=14, color=ft.Colors.GREEN_400)
                         ], expand=True),
-                        ft.IconButton(ft.Icons.EDIT, icon_color=ft.Colors.BLUE, on_click=lambda e, i=id_p, n=nombre, p=precio: abrir_dialogo_producto(i, n, p)),
-                        ft.IconButton(ft.Icons.DELETE, icon_color=ft.Colors.RED, on_click=lambda e, i=id_p: eliminar_producto(i))
+                        ft.Row([
+                            ft.IconButton(ft.Icons.EDIT, icon_color=ft.Colors.BLUE_400, on_click=lambda e, i=id_p, n=nombre, p=precio: abrir_dialogo_producto(i, n, p)),
+                            ft.IconButton(ft.Icons.DELETE, icon_color=ft.Colors.RED_400, on_click=lambda e, i=id_p: eliminar_producto(i))
+                        ])
                     ]),
-                    padding=10, border=ft.Border.all(1, ft.Colors.GREY_800), border_radius=10
+                    padding=12, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=8, margin=ft.margin.only(bottom=8)
                 )
             )
         conexion.close()
@@ -404,11 +417,11 @@ async def main(page: ft.Page):
                 pass
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Monto de Venta (Bs)"),
+            title=ft.Text("Monto de Venta (Bs)", weight=ft.FontWeight.BOLD),
             content=ft.Column([ft.Text("Ingresa el monto total en Bolívares:"), entry_monto], tight=True),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
-                ft.Button("Añadir al Carrito", on_click=agregar_monto, bgcolor=ft.Colors.GREEN)
+                ft.Button("Añadir al Carrito", on_click=agregar_monto, bgcolor=ft.Colors.GREEN_700)
             ]
         )
         page.overlay.append(dialog)
@@ -451,17 +464,18 @@ async def main(page: ft.Page):
         
         vista_carrito.controls.clear()
         if not lista_carrito:
-            vista_carrito.controls.append(ft.Text("El carrito está vacío. Toca '+ Añadir Productos'", color=ft.Colors.GREY))
+            vista_carrito.controls.append(ft.Text("El carrito está vacío. Toca '+ Añadir Productos'", color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER, margin=20))
         else:
             for item in lista_carrito:
                 cant_str = int(item['cantidad']) if float(item['cantidad']).is_integer() else item['cantidad']
                 fila = ft.Row([
                     ft.Text(f"{cant_str}x {item['nombre']}", expand=True, size=14, weight=ft.FontWeight.BOLD),
-                    ft.Text(f"${item['precio'] * item['cantidad']:.2f}", size=14, color=ft.Colors.GREEN),
-                    ft.IconButton(ft.Icons.REMOVE_CIRCLE_OUTLINE, icon_color=ft.Colors.ORANGE, on_click=lambda e, i=item['id']: restar_unidad(i), icon_size=20),
-                    ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED, on_click=lambda e, i=item['id']: eliminar_del_carrito(i), icon_size=20)
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+                    ft.Text(f"${item['precio'] * item['cantidad']:.2f}", size=14, color=ft.Colors.GREEN_400),
+                    ft.IconButton(ft.Icons.REMOVE_CIRCLE_OUTLINE, icon_color=ft.Colors.ORANGE_400, on_click=lambda e, i=item['id']: restar_unidad(i), icon_size=20),
+                    ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_400, on_click=lambda e, i=item['id']: eliminar_del_carrito(i), icon_size=20)
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER)
                 vista_carrito.controls.append(fila)
+                vista_carrito.controls.append(ft.Divider(height=1, color=ft.Colors.GREY_800))
         
         page.update()
 
@@ -471,22 +485,22 @@ async def main(page: ft.Page):
             actualizar_badge(id_p)
         actualizar_carrito()
 
-    entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH)
-    vista_productos = ft.ListView(expand=True, spacing=15)
+    entry_buscador = ft.TextField(hint_text="🔍 Buscar producto...", on_change=lambda e: cargar_productos_vista(e.control.value), prefix_icon=ft.Icons.SEARCH, expand=True)
+    vista_productos = ft.ListView(expand=True, spacing=12, padding=10)
     
     contenedor_busqueda.content = ft.Column([
         ft.Row([
             ft.IconButton(ft.Icons.ARROW_BACK, on_click=cambiar_a_carrito, icon_color=ft.Colors.WHITE),
-            ft.Text("Añadir Productos", size=20, weight=ft.FontWeight.BOLD)
-        ]),
-        entry_buscador,
+            ft.Text("Añadir Productos", size=22, weight=ft.FontWeight.BOLD)
+        ], alignment=ft.MainAxisAlignment.START, spacing=20),
+        ft.Row([entry_buscador], vertical_alignment=ft.CrossAxisAlignment.CENTER),
         vista_productos
-    ], expand=True)
+    ], expand=True, spacing=15)
 
     async def cobrar_ticket(e):
         try:
             if not lista_carrito:
-                sb = ft.SnackBar(ft.Text("El carrito está vacío"), bgcolor=ft.Colors.RED)
+                sb = ft.SnackBar(ft.Text("El carrito está vacío"), bgcolor=ft.Colors.RED_700)
                 page.overlay.append(sb)
                 sb.open = True
                 page.update()
@@ -523,33 +537,33 @@ async def main(page: ft.Page):
                 actualizar_badge(id_p)
             actualizar_carrito()
             
-            sb = ft.SnackBar(ft.Text("¡Ticket copiado y venta registrada!"), bgcolor=ft.Colors.GREEN)
+            sb = ft.SnackBar(ft.Text("¡Ticket copiado y venta registrada!"), bgcolor=ft.Colors.GREEN_700)
             page.overlay.append(sb)
             sb.open = True
             page.update()
         except Exception as ex:
-            sb = ft.SnackBar(ft.Text(f"Error: {ex}"), bgcolor=ft.Colors.RED)
+            sb = ft.SnackBar(ft.Text(f"Error: {ex}"), bgcolor=ft.Colors.RED_700)
             page.overlay.append(sb)
             sb.open = True
             page.update()
 
     contenedor_carrito.content = ft.Column([
         ft.Row([
-            ft.Text("🛒 Carrito Actual", size=20, weight=ft.FontWeight.BOLD),
-            ft.TextButton("Vaciar Todo", on_click=vaciar_carrito, style=ft.ButtonStyle(color=ft.Colors.RED))
+            ft.Text("🛒 Carrito Actual", size=22, weight=ft.FontWeight.BOLD),
+            ft.TextButton("Vaciar Todo", on_click=vaciar_carrito, style=ft.ButtonStyle(color=ft.Colors.RED_400))
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         
         ft.Row([
-            ft.Button("➕ Añadir", on_click=cambiar_a_busqueda, bgcolor=ft.Colors.BLUE_700, icon=ft.Icons.ADD_SHOPPING_CART, height=50, expand=True),
-            ft.Button("💵 Monto en Bs", on_click=abrir_dialogo_monto_bs, bgcolor=ft.Colors.ORANGE_700, height=50, expand=True)
+            ft.Button("➕ Añadir", on_click=cambiar_a_busqueda, bgcolor=ft.Colors.BLUE_700, icon=ft.Icons.ADD_SHOPPING_CART, height=55, expand=True),
+            ft.Button("💵 Monto en Bs", on_click=abrir_dialogo_monto_bs, bgcolor=ft.Colors.ORANGE_700, height=55, expand=True)
         ]),
         
-        ft.Container(content=vista_carrito, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=5, padding=10, expand=True),
-        ft.Divider(),
+        ft.Container(content=vista_carrito, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=8, padding=10, expand=True),
+        ft.Divider(height=2),
         txt_total_ui,
         txt_total_bs_ui,
-        ft.Button("COBRAR Y COPIAR TICKET", on_click=cobrar_ticket, bgcolor=ft.Colors.GREEN, height=50)
-    ], expand=True)
+        ft.Button("COBRAR Y COPIAR TICKET", on_click=cobrar_ticket, bgcolor=ft.Colors.GREEN_700, height=60, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)))
+    ], expand=True, spacing=15)
 
     def abrir_dialogo_producto(id_p=None, nombre="", precio=0.0):
         entry_nombre = ft.TextField(label="Nombre del Producto", value=nombre)
@@ -585,11 +599,11 @@ async def main(page: ft.Page):
                 pass
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Editar Producto" if id_p else "Nuevo Producto"),
+            title=ft.Text("Editar Producto" if id_p else "Nuevo Producto", weight=ft.FontWeight.BOLD),
             content=ft.Column([entry_nombre, switch_bs, entry_precio], tight=True),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
-                ft.Button("Guardar", on_click=guardar, bgcolor=ft.Colors.GREEN)
+                ft.Button("Guardar", on_click=guardar, bgcolor=ft.Colors.GREEN_700)
             ]
         )
         page.overlay.append(dialog)
@@ -613,19 +627,19 @@ async def main(page: ft.Page):
             content=ft.Text("El producto ya no aparecerá en la lista de ventas."),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
-                ft.Button("Eliminar", on_click=confirmar, bgcolor=ft.Colors.RED)
+                ft.Button("Eliminar", on_click=confirmar, bgcolor=ft.Colors.RED_700)
             ]
         )
         page.overlay.append(dialog)
         dialog.open = True
         page.update()
 
-    vista_almacen = ft.ListView(expand=True, spacing=10)
+    vista_almacen = ft.ListView(expand=True, spacing=10, padding=10)
     tab_almacen = ft.Container(
         content=ft.Column([
             ft.Row([
-                ft.Text("Inventario", size=20, weight=ft.FontWeight.BOLD),
-                ft.Button("Añadir +", on_click=lambda e: abrir_dialogo_producto(), bgcolor=ft.Colors.BLUE)
+                ft.Text("Inventario", size=22, weight=ft.FontWeight.BOLD),
+                ft.Button("Añadir +", on_click=lambda e: abrir_dialogo_producto(), bgcolor=ft.Colors.BLUE_700)
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             vista_almacen
         ], expand=True),
@@ -648,8 +662,8 @@ async def main(page: ft.Page):
         txt_cierre.value = f"Ventas de hoy: {len(ventas)}\n\nTotal Recaudado: ${t_usd:.2f}\nTotal Bs: {t_bs:.2f} Bs."
         page.update()
 
-        # Aviso visual para que el usuario sepa que el botón funcionó
-        if e is not None: # Solo mostrar el aviso si se presionó el botón, no si se cargó automático
+        # Aviso visual (AHORA ESTÁ DENTRO DE LA FUNCIÓN CORRECTAMENTE)
+        if e is not None: 
             sb = ft.SnackBar(ft.Text("Datos del cierre actualizados"), bgcolor=ft.Colors.BLUE_700)
             page.overlay.append(sb)
             sb.open = True
@@ -664,7 +678,7 @@ async def main(page: ft.Page):
         conexion.close()
 
         if not ventas:
-            sb = ft.SnackBar(ft.Text("No hay ventas para copiar hoy."), bgcolor=ft.Colors.ORANGE)
+            sb = ft.SnackBar(ft.Text("No hay ventas para copiar hoy."), bgcolor=ft.Colors.ORANGE_700)
             page.overlay.append(sb)
             sb.open = True
             page.update()
@@ -677,13 +691,13 @@ async def main(page: ft.Page):
             hora = v[0][11:16]
             t_usd += v[1]
             t_bs += v[2]
-            texto += f"Venta #{i} ({hora}): {v[3]}\n  Total: ${v[1]:.2f} / {v[2]:.2f} Bs.\n"
+            texto += f"Venta #{i} ({hora}): {v[3]}\n Total: ${v[1]:.2f} / {v[2]:.2f} Bs.\n"
 
         texto += f"\n=========================\n💰 TOTAL VENTAS: {len(ventas)}\n🟢 Total Ref: ${t_usd:.2f}\n🔵 Total Bs: {t_bs:.2f} Bs.\n=========================\n"
 
         await clipboard.set(texto)
         
-        sb = ft.SnackBar(ft.Text("¡Cierre copiado al portapapeles!"), bgcolor=ft.Colors.GREEN)
+        sb = ft.SnackBar(ft.Text("¡Cierre copiado al portapapeles!"), bgcolor=ft.Colors.GREEN_700)
         page.overlay.append(sb)
         sb.open = True
         page.update()
@@ -698,7 +712,7 @@ async def main(page: ft.Page):
             conexion.close()
             dialog.open = False
             cargar_cierre()
-            sb = ft.SnackBar(ft.Text("Ventas de hoy reiniciadas."), bgcolor=ft.Colors.GREEN)
+            sb = ft.SnackBar(ft.Text("Ventas de hoy reiniciadas."), bgcolor=ft.Colors.GREEN_700)
             page.overlay.append(sb)
             sb.open = True
             page.update()
@@ -708,7 +722,7 @@ async def main(page: ft.Page):
             content=ft.Text("Se borrarán las ventas de hoy de la base de datos. ¿Estás seguro?"),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
-                ft.ElevatedButton("Sí, Reiniciar", on_click=confirmar_reset, bgcolor=ft.Colors.RED)
+                ft.Button("Sí, Reiniciar", on_click=confirmar_reset, bgcolor=ft.Colors.RED_700)
             ]
         )
         page.overlay.append(dialog)
@@ -717,14 +731,14 @@ async def main(page: ft.Page):
 
     tab_cierre = ft.Container(
         content=ft.Column([
-            ft.Text("Cierre de Caja Diario", size=20, weight=ft.FontWeight.BOLD),
+            ft.Text("Cierre de Caja Diario", size=22, weight=ft.FontWeight.BOLD),
             txt_cierre,
             ft.Row([
-                ft.Button("Actualizar", on_click=cargar_cierre, bgcolor=ft.Colors.BLUE),
-                ft.Button("Copiar Cierre", on_click=copiar_cierre, bgcolor=ft.Colors.GREEN),
-                ft.Button("Reiniciar Día", on_click=reiniciar_dia, bgcolor=ft.Colors.RED)
+                ft.Button("Actualizar", on_click=cargar_cierre, bgcolor=ft.Colors.BLUE_700),
+                ft.Button("Copiar Cierre", on_click=copiar_cierre, bgcolor=ft.Colors.GREEN_700),
+                ft.Button("Reiniciar Día", on_click=reiniciar_dia, bgcolor=ft.Colors.RED_700)
             ], alignment=ft.MainAxisAlignment.CENTER, wrap=True)
-        ], spacing=20),
+        ], spacing=20, padding=10),
         padding=10
     )
 
@@ -755,19 +769,19 @@ async def main(page: ft.Page):
         on_change=cambiar_pestana
     )
 
-    btn_editar_tasa = ft.IconButton(ft.Icons.EDIT, icon_color=ft.Colors.ORANGE, tooltip="Cambiar Tasa Manual", on_click=abrir_dialogo_tasa)
-    btn_activar_manual = ft.IconButton(ft.Icons.KEY, icon_color=ft.Colors.AMBER, tooltip="Activar Licencia", on_click=lambda e: page.run_task(mostrar_ventana_activacion, page, codigo_id))
+    btn_editar_tasa = ft.IconButton(ft.Icons.EDIT, icon_color=ft.Colors.ORANGE_400, tooltip="Cambiar Tasa Manual", on_click=abrir_dialogo_tasa)
+    btn_activar_manual = ft.IconButton(ft.Icons.KEY, icon_color=ft.Colors.AMBER_400, tooltip="Activar Licencia", on_click=lambda e: page.run_task(mostrar_ventana_activacion, page, codigo_id))
 
     cabecera = ft.Row([
         ft.Column([
-            ft.Text("Tu Compra Rápida", size=18, weight=ft.FontWeight.BOLD), 
+            ft.Text("Tu Compra Rápida", size=20, weight=ft.FontWeight.BOLD), 
             ft.Row([txt_licencia_ui, btn_activar_manual], spacing=5)
         ]),
         ft.Row([
             txt_tasa_ui,
             btn_editar_tasa
         ], spacing=2)
-    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, padding=10)
 
     contenido_principal.content = ft.Column([contenedor_busqueda, contenedor_carrito], expand=True)
     
