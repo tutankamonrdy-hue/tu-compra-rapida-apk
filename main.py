@@ -455,7 +455,13 @@ async def main(page: ft.Page):
         
         vista_carrito.controls.clear()
         if not lista_carrito:
-            vista_carrito.controls.append(ft.Text("El carrito está vacío. Toca '+ Añadir Productos'", color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER, margin=20))
+            # CORRECCIÓN AQUÍ: Envolvemos el Text en un Container para usar padding
+            vista_carrito.controls.append(
+                ft.Container(
+                    content=ft.Text("El carrito está vacío. Toca '+ Añadir Productos'", color=ft.Colors.GREY_500, text_align=ft.TextAlign.CENTER),
+                    padding=20
+                )
+            )
         else:
             for item in lista_carrito:
                 cant_str = int(item['cantidad']) if float(item['cantidad']).is_integer() else item['cantidad']
@@ -719,7 +725,6 @@ async def main(page: ft.Page):
         dialog.open = True
         page.update()
 
-    # CORRECCIÓN AQUÍ: Quitamos padding=10 del Column
     tab_cierre = ft.Container(
         content=ft.Column([
             ft.Text("Cierre de Caja Diario", size=22, weight=ft.FontWeight.BOLD),
@@ -729,7 +734,7 @@ async def main(page: ft.Page):
                 ft.Button("Copiar Cierre", on_click=copiar_cierre, bgcolor=ft.Colors.GREEN_700),
                 ft.Button("Reiniciar Día", on_click=reiniciar_dia, bgcolor=ft.Colors.RED_700)
             ], alignment=ft.MainAxisAlignment.CENTER, wrap=True)
-        ], spacing=20), # <--- AQUÍ SE QUITÓ EL PADDING
+        ], spacing=20), 
         padding=10
     )
 
@@ -763,7 +768,6 @@ async def main(page: ft.Page):
     btn_editar_tasa = ft.IconButton(ft.Icons.EDIT, icon_color=ft.Colors.ORANGE_400, tooltip="Cambiar Tasa Manual", on_click=abrir_dialogo_tasa)
     btn_activar_manual = ft.IconButton(ft.Icons.KEY, icon_color=ft.Colors.AMBER_400, tooltip="Activar Licencia", on_click=lambda e: page.run_task(mostrar_ventana_activacion, page, codigo_id))
 
-    # CORRECCIÓN AQUÍ: Quitamos padding=10 del Row
     cabecera = ft.Row([
         ft.Column([
             ft.Text("Tu Compra Rápida", size=20, weight=ft.FontWeight.BOLD), 
@@ -773,7 +777,7 @@ async def main(page: ft.Page):
             txt_tasa_ui,
             btn_editar_tasa
         ], spacing=2)
-    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN) # <--- AQUÍ SE QUITÓ EL PADDING
+    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN) 
 
     contenido_principal.content = ft.Column([contenedor_busqueda, contenedor_carrito], expand=True)
     
@@ -785,4 +789,3 @@ async def main(page: ft.Page):
 
 if __name__ == "__main__":
     ft.run(main)
-    
