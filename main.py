@@ -11,6 +11,7 @@ import re
 import warnings
 from bs4 import BeautifulSoup
 from datetime import datetime
+import time
 
 # === CONFIGURACIÓN DE RUTAS ===
 STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
@@ -31,8 +32,9 @@ def obtener_tasa_bcv(page, txt_tasa_ui):
     
     # INTENTO 1: Página oficial del BCV
     try:
+        print("Conectando al BCV...")
         url_bcv = "https://bcv.org.ve"
-        respuesta = requests.get(url_bcv, verify=False, timeout=8)
+        respuesta = requests.get(url_bcv, verify=False, timeout=10)
         if respuesta.status_code == 200:
             soup = BeautifulSoup(respuesta.text, 'html.parser')
             contenedor_dolar = soup.find('div', id='dolar')
@@ -48,8 +50,9 @@ def obtener_tasa_bcv(page, txt_tasa_ui):
     # INTENTO 2 (PLAN B): API Alternativa
     if nueva_tasa is None:
         try:
+            print("Intentando Plan B (DolarAPI)...")
             url_api = "https://ve.dolarapi.com/v1/dolares/oficial"
-            respuesta_api = requests.get(url_api, timeout=8)
+            respuesta_api = requests.get(url_api, timeout=10)
             if respuesta_api.status_code == 200:
                 datos = respuesta_api.json()
                 if "promedio" in datos and datos["promedio"] is not None:
@@ -62,21 +65,30 @@ def obtener_tasa_bcv(page, txt_tasa_ui):
         with tasa_lock:
             tasa_del_dia = nueva_tasa
         
-        if txt_tasa_ui and page:
-            def update_ui():
+        def update_ui():
+            if txt_tasa_ui:
                 txt_tasa_ui.value = f"Tasa: {nueva_tasa:.2f} Bs."
                 page.update()
-            
-            if hasattr(page, 'run_thread'):
-                page.run_thread(update_ui)
-            else:
-                update_ui()
+        
+        try:
+            page.run_thread(update_ui)
+        except Exception:
+            update_ui()
+    else:
+        def mostrar_error():
+            sb = ft.SnackBar(ft.Text("No se pudo actualizar la tasa. Verifica tu internet."), bgcolor=ft.Colors.ORANGE)
+            page.overlay.append(sb)
+            sb.open = True
+            page.update()
+        
+        try:
+            page.run_thread(mostrar_error)
+        except Exception:
+            mostrar_error()
 
 def actualizar_tasa_en_hilo(page, txt_tasa_ui):
-    if hasattr(page, 'run_thread'):
-        page.run_thread(obtener_tasa_bcv, args=(page, txt_tasa_ui))
-    else:
-        threading.Thread(target=obtener_tasa_bcv, args=(page, txt_tasa_ui), daemon=True).start()
+    thread = threading.Thread(target=obtener_tasa_bcv, args=(page, txt_tasa_ui), daemon=True)
+    thread.start()
 
 # === SISTEMA DE LICENCIAS ===
 async def verificar_licencia(page):
@@ -207,7 +219,6 @@ def inicializar_bd(page):
         id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, categoria TEXT NOT NULL, 
         costo_dolar REAL NOT NULL, estatus TEXT DEFAULT 'Activo', cantidad INTEGER DEFAULT 0)""")
     
-    # Arreglo de la fecha para que no falle el cierre
     cursor.execute("""CREATE TABLE IF NOT EXISTS ventas (
         id INTEGER PRIMARY KEY AUTOINCREMENT, fecha_hora TIMESTAMP,
         total_usd REAL, total_bs REAL, productos_detalles TEXT, iva_usd REAL DEFAULT 0)""")
@@ -377,7 +388,9 @@ async def main(page: ft.Page):
                 monto_bs = float(entry_monto.value)
                 if monto_bs > 0:
                     precio_usd = monto_bs / tasa_del_dia
-                    agregar_al_carrito("libre_bs", f"Venta Libre ({monto_bs:.0f} Bs)", precio_usd, 1)
+                    # ID ÚNICO PARA CADA VENTA LIBRE
+                    id_unico = f"libre_{uuid.uuid4().hex[:6]}"
+                    agregar_al_carrito(id_unico, f"Venta Libre ({monto_bs:.0f} Bs)", precio_usd, 1)
                     dialog.open = False
                     page.update()
             except:
@@ -612,14 +625,14 @@ async def main(page: ft.Page):
         padding=10
     )
 
+    # === LÓGICA Y DISEÑO DEL CIERRE DE CAJA ===
     txt_cierre = ft.Text("Cargando...")
+    
     def cargar_cierre():
         conexion = sqlite3.connect(DB_PATH)
         cursor = conexion.cursor()
-        
         fecha_busqueda = datetime.now().strftime("%Y-%m-%d")
         cursor.execute("SELECT total_usd, total_bs FROM ventas WHERE DATE(fecha_hora) = ?", (fecha_busqueda,))
-        
         ventas = cursor.fetchall()
         conexion.close()
         
@@ -628,12 +641,75 @@ async def main(page: ft.Page):
         txt_cierre.value = f"Ventas de hoy: {len(ventas)}\n\nTotal Recaudado: ${t_usd:.2f}\nTotal Bs: {t_bs:.2f} Bs."
         page.update()
 
+    def copiar_cierre(e):
+        conexion = sqlite3.connect(DB_PATH)
+        cursor = conexion.cursor()
+        fecha_busqueda = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute("SELECT fecha_hora, total_usd, total_bs, productos_detalles FROM ventas WHERE DATE(fecha_hora) = ?", (fecha_busqueda,))
+        ventas = cursor.fetchall()
+        conexion.close()
+
+        if not ventas:
+            sb = ft.SnackBar(ft.Text("No hay ventas para copiar hoy."), bgcolor=ft.Colors.ORANGE)
+            page.overlay.append(sb)
+            sb.open = True
+            page.update()
+            return
+
+        texto = f"=== CIERRE DE CAJA - {datetime.now().strftime('%d/%m/%Y')} ===\n\n"
+        t_usd = 0
+        t_bs = 0
+        for i, v in enumerate(ventas, 1):
+            hora = v[0][11:16]
+            t_usd += v[1]
+            t_bs += v[2]
+            texto += f"Venta #{i} ({hora}): {v[3]}\n  Total: ${v[1]:.2f} / {v[2]:.2f} Bs.\n"
+
+        texto += f"\n=========================\n💰 TOTAL VENTAS: {len(ventas)}\n🟢 Total Ref: ${t_usd:.2f}\n🔵 Total Bs: {t_bs:.2f} Bs.\n=========================\n"
+
+        page.set_clipboard(texto)
+        sb = ft.SnackBar(ft.Text("¡Cierre copiado al portapapeles!"), bgcolor=ft.Colors.GREEN)
+        page.overlay.append(sb)
+        sb.open = True
+        page.update()
+
+    def reiniciar_dia(e):
+        def confirmar_reset(e):
+            conexion = sqlite3.connect(DB_PATH)
+            cursor = conexion.cursor()
+            fecha_busqueda = datetime.now().strftime("%Y-%m-%d")
+            cursor.execute("DELETE FROM ventas WHERE DATE(fecha_hora) = ?", (fecha_busqueda,))
+            conexion.commit()
+            conexion.close()
+            dialog.open = False
+            cargar_cierre()
+            sb = ft.SnackBar(ft.Text("Ventas de hoy reiniciadas."), bgcolor=ft.Colors.GREEN)
+            page.overlay.append(sb)
+            sb.open = True
+            page.update()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("¿Reiniciar Día?"),
+            content=ft.Text("Se borrarán las ventas de hoy de la base de datos. ¿Estás seguro?"),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, 'open', False) or page.update()),
+                ft.ElevatedButton("Sí, Reiniciar", on_click=confirmar_reset, bgcolor=ft.Colors.RED)
+            ]
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
     tab_cierre = ft.Container(
         content=ft.Column([
             ft.Text("Cierre de Caja Diario", size=20, weight=ft.FontWeight.BOLD),
             txt_cierre,
-            ft.Button("Actualizar Datos", on_click=lambda e: cargar_cierre(), bgcolor=ft.Colors.BLUE)
-        ]),
+            ft.Row([
+                ft.Button("Actualizar", on_click=lambda e: cargar_cierre(), bgcolor=ft.Colors.BLUE),
+                ft.Button("Copiar Cierre", on_click=copiar_cierre, bgcolor=ft.Colors.GREEN),
+                ft.Button("Reiniciar Día", on_click=reiniciar_dia, bgcolor=ft.Colors.RED)
+            ], alignment=ft.MainAxisAlignment.CENTER, wrap=True)
+        ], spacing=20),
         padding=10
     )
 
