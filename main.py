@@ -7,6 +7,8 @@ import shutil
 import requests
 import threading
 import uuid
+import re
+import warnings
 from bs4 import BeautifulSoup
 from datetime import datetime
 
@@ -15,38 +17,82 @@ STORAGE_PATH = os.getenv("FLET_APP_STORAGE_DATA", ".")
 DB_PATH = os.path.join(STORAGE_PATH, "inventario.db")
 
 # === VARIABLES GLOBALES ===
-tasa_del_dia = 887.30
+tasa_del_dia = 887.30  
 SECRETO = "TuCompraRapida2026"
 DIAS_PRUEBA = 2
+tasa_lock = threading.Lock()
 
-# === TASA BCV AUTOMÁTICA ===
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
+# === TASA BCV AUTOMÁTICA ROBUSTA ===
 def obtener_tasa_bcv(page, txt_tasa_ui):
     global tasa_del_dia
-    url = "https://bcv.org.ve"
+    nueva_tasa = None
+    
+    # INTENTO 1: Página oficial del BCV
     try:
-        respuesta = requests.get(url, verify=False, timeout=5)
+        url_bcv = "https://bcv.org.ve"
+        respuesta = requests.get(url_bcv, verify=False, timeout=8)
         if respuesta.status_code == 200:
             soup = BeautifulSoup(respuesta.text, 'html.parser')
             contenedor_dolar = soup.find('div', id='dolar')
             if contenedor_dolar:
-                precio_texto = contenedor_dolar.find('strong').text.strip()
-                tasa_del_dia = float(precio_texto.replace(',', '.'))
-                txt_tasa_ui.value = f"Tasa: {tasa_del_dia:.2f} Bs."
+                precio_texto = contenedor_dolar.find('strong').get_text(strip=True)
+                precio_limpio = re.sub(r'[^\d.]', '', precio_texto)
+                if precio_limpio and '.' in precio_limpio:
+                    nueva_tasa = float(precio_limpio)
+                    print(f"Tasa obtenida vía BCV: {nueva_tasa}")
+    except Exception as e:
+        print(f"Fallo BCV (intentando Plan B): {e}")
+
+    # INTENTO 2 (PLAN B): API Alternativa
+    if nueva_tasa is None:
+        try:
+            url_api = "https://ve.dolarapi.com/v1/dolares/oficial"
+            respuesta_api = requests.get(url_api, timeout=8)
+            if respuesta_api.status_code == 200:
+                datos = respuesta_api.json()
+                if "promedio" in datos and datos["promedio"] is not None:
+                    nueva_tasa = float(datos["promedio"])
+                    print(f"Tasa obtenida vía API Alternativa: {nueva_tasa}")
+        except Exception as e:
+            print(f"Fallo Plan B: {e}")
+
+    if nueva_tasa is not None:
+        with tasa_lock:
+            tasa_del_dia = nueva_tasa
+        
+        if txt_tasa_ui and page:
+            def update_ui():
+                txt_tasa_ui.value = f"Tasa: {nueva_tasa:.2f} Bs."
                 page.update()
-    except:
-        pass 
+            
+            if hasattr(page, 'run_thread'):
+                page.run_thread(update_ui)
+            else:
+                update_ui()
 
 def actualizar_tasa_en_hilo(page, txt_tasa_ui):
-    threading.Thread(target=obtener_tasa_bcv, args=(page, txt_tasa_ui), daemon=True).start()
+    if hasattr(page, 'run_thread'):
+        page.run_thread(obtener_tasa_bcv, args=(page, txt_tasa_ui))
+    else:
+        threading.Thread(target=obtener_tasa_bcv, args=(page, txt_tasa_ui), daemon=True).start()
 
 # === SISTEMA DE LICENCIAS ===
 async def verificar_licencia(page):
     hoy = datetime.now()
-    prefs = ft.SharedPreferences()
+    prefs = None
+    if hasattr(page, 'services') and page.services:
+        for s in page.services:
+            if isinstance(s, ft.SharedPreferences):
+                prefs = s
+                break
     
-    if prefs not in page.services:
-        page.services.append(prefs)
-    
+    if not prefs:
+        prefs = ft.SharedPreferences()
+        if hasattr(page, 'services'):
+            page.services.append(prefs)
+
     licencia_str = await prefs.get("tcr_licencia")
     
     if not licencia_str:
@@ -56,33 +102,51 @@ async def verificar_licencia(page):
         await prefs.set("tcr_licencia", json.dumps(datos))
         return True, f"Prueba: {DIAS_PRUEBA} días", codigo_id
         
-    datos = json.loads(licencia_str)
+    try:
+        datos = json.loads(licencia_str)
+    except json.JSONDecodeError:
+        return await verificar_licencia(page)
+
     codigo_id = datos.get("codigo_id", "ERROR")
         
     if datos.get("tipo") == "activa":
         return True, "✅ Licencia Activa", codigo_id
         
-    ultima_fecha = datetime.strptime(datos.get("ultima_fecha_vista"), "%Y-%m-%d")
-    if hoy < ultima_fecha:
-        return False, "❌ Error de fecha", codigo_id
+    try:
+        ultima_fecha = datetime.strptime(datos.get("ultima_fecha_vista"), "%Y-%m-%d")
+    except ValueError:
+        return False, "❌ Error de formato de fecha", codigo_id
         
     datos["ultima_fecha_vista"] = hoy.strftime("%Y-%m-%d")
     await prefs.set("tcr_licencia", json.dumps(datos))
         
-    fecha_inicio_dt = datetime.strptime(datos["fecha_inicio"], "%Y-%m-%d")
-    dias = (hoy - fecha_inicio_dt).days
+    try:
+        fecha_inicio_dt = datetime.strptime(datos["fecha_inicio"], "%Y-%m-%d")
+        dias = (hoy - fecha_inicio_dt).days
+    except KeyError:
+        dias = 0
     
     if dias >= DIAS_PRUEBA:
-        return False, "❌ Prueba Vencida", codigo_id
+        return False, f"❌ Prueba Vencida ({dias} días)", codigo_id
         
-    return True, f"⏳ Prueba: {DIAS_PRUEBA - dias} días", codigo_id
+    return True, f"⏳ Prueba: {DIAS_PRUEBA - dias} días restantes", codigo_id
 
 async def mostrar_ventana_activacion(page, codigo_id):
-    entry_codigo = ft.TextField(label="Código de Activación (8 letras)", text_align=ft.TextAlign.CENTER)
+    entry_codigo = ft.TextField(
+        label="Código de Activación (8 caracteres)", 
+        text_align=ft.TextAlign.CENTER, 
+        autofocus=True
+    )
+    
     prefs = ft.SharedPreferences()
+    if prefs not in page.services:
+        page.services.append(prefs)
 
     async def activar(e):
         codigo_ingresado = entry_codigo.value.strip().upper()
+        if not codigo_ingresado:
+            return
+
         codigo_id_limpio = codigo_id.replace("-", "")
         texto_a_encriptar = f"{codigo_id_limpio}-{SECRETO}"
         codigo_esperado = hashlib.sha256(texto_a_encriptar.encode()).hexdigest()[:8].upper()
@@ -95,7 +159,10 @@ async def mostrar_ventana_activacion(page, codigo_id):
             page.update()
             
             page.controls.clear()
-            await main(page)
+            try:
+                await main(page)
+            except Exception as ex:
+                print(f"Error recargando main: {ex}")
             page.update()
         else:
             sb = ft.SnackBar(ft.Text("Código incorrecto ❌"), bgcolor=ft.Colors.RED)
@@ -106,18 +173,21 @@ async def mostrar_ventana_activacion(page, codigo_id):
     dialogo = ft.AlertDialog(
         title=ft.Text("🔒 Activación Requerida", text_align=ft.TextAlign.CENTER),
         content=ft.Column([
-            ft.Text("Su período de prueba ha terminado.\nEnvíe este Código de Serie a su proveedor:", text_align=ft.TextAlign.CENTER),
+            ft.Text("Envíe este código a su proveedor:", text_align=ft.TextAlign.CENTER, size=12),
             ft.Container(
-                content=ft.Text(codigo_id, size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN),
-                bgcolor="#2b2b2b", padding=15, border_radius=5, alignment=ft.Alignment(0, 0)
+                content=ft.Text(codigo_id, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN),
+                bgcolor="#2b2b2b", padding=10, border_radius=5, alignment=ft.Alignment(0, 0)
             ),
-            entry_codigo
-        ], tight=True),
-        actions=[ft.Button("Activar Programa 🔓", on_click=activar, bgcolor=ft.Colors.GREEN, width=300)],
+            entry_codigo,
+            ft.Row([
+                ft.ElevatedButton("Activar", on_click=activar),
+                ft.OutlinedButton("Cancelar", on_click=lambda e: (setattr(dialogo, 'open', False), page.update()))
+            ], alignment=ft.MainAxisAlignment.END)
+        ], spacing=15, width=300), 
         actions_alignment=ft.MainAxisAlignment.CENTER
     )
     
-    page.overlay.append(dialogo)
+    page.dialog = dialogo
     dialogo.open = True
     page.update()
 
@@ -128,16 +198,18 @@ def inicializar_bd(page):
             asset_db = page.get_asset_path("inventario.db")
             if asset_db and os.path.exists(asset_db):
                 shutil.copy(asset_db, DB_PATH)
-        except:
-            pass
+        except Exception as e:
+            print(f"No se pudo copiar la BD: {e}")
 
     conexion = sqlite3.connect(DB_PATH)
     cursor = conexion.cursor()
     cursor.execute("""CREATE TABLE IF NOT EXISTS productos (
         id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, categoria TEXT NOT NULL, 
         costo_dolar REAL NOT NULL, estatus TEXT DEFAULT 'Activo', cantidad INTEGER DEFAULT 0)""")
+    
+    # Arreglo de la fecha para que no falle el cierre
     cursor.execute("""CREATE TABLE IF NOT EXISTS ventas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fecha_hora TIMESTAMP,
         total_usd REAL, total_bs REAL, productos_detalles TEXT, iva_usd REAL DEFAULT 0)""")
     conexion.commit()
     conexion.close()
@@ -166,7 +238,7 @@ async def main(page: ft.Page):
         return
 
     lista_carrito = []
-    diccionario_badges = {} # Para guardar los contadores rojos visuales
+    diccionario_badges = {}
     
     txt_licencia_ui = ft.Text(txt_licencia, color=ft.Colors.YELLOW, weight=ft.FontWeight.BOLD, size=12)
     txt_tasa_ui = ft.Text(f"Tasa: {tasa_del_dia:.2f} Bs.", color=ft.Colors.CYAN, weight=ft.FontWeight.BOLD, size=12)
@@ -231,14 +303,12 @@ async def main(page: ft.Page):
         for prod in cursor.fetchall():
             id_p, nombre, precio = prod
             
-            # Buscar si ya está en el carrito para mostrar el número inicial
             cant_actual = 0
             for item in lista_carrito:
                 if str(item["id"]) == str(id_p):
                     cant_actual = item["cantidad"]
                     break
             
-            # Creamos el pequeño circulito rojo con el número
             lbl_badge = ft.Text(str(int(cant_actual)) if cant_actual > 0 else "", color=ft.Colors.WHITE, size=12, weight=ft.FontWeight.BOLD)
             cont_badge = ft.Container(
                 content=lbl_badge,
@@ -250,7 +320,6 @@ async def main(page: ft.Page):
                 visible=(cant_actual > 0)
             )
             
-            # El botón normal
             btn = ft.Button(
                 content=ft.Text(f"{nombre} - ${precio:.2f}", size=16),
                 on_click=lambda e, i=id_p, n=nombre, p=precio: agregar_al_carrito(i, n, p, 1),
@@ -258,9 +327,7 @@ async def main(page: ft.Page):
                 height=50, width=400
             )
             
-            # Los apilamos (botón abajo, circulito arriba a la derecha)
             stack = ft.Stack([btn, cont_badge], width=400, height=50)
-            
             diccionario_badges[str(id_p)] = (cont_badge, lbl_badge)
             vista_productos.controls.append(stack)
             
@@ -380,7 +447,6 @@ async def main(page: ft.Page):
 
     def vaciar_carrito(e):
         lista_carrito.clear()
-        # Ocultar todos los badges
         for id_p in diccionario_badges:
             actualizar_badge(id_p)
         actualizar_carrito()
@@ -424,7 +490,11 @@ async def main(page: ft.Page):
             conexion = sqlite3.connect(DB_PATH)
             cursor = conexion.cursor()
             detalle_str = ", ".join([f"{int(i['cantidad']) if float(i['cantidad']).is_integer() else i['cantidad']}x {i['nombre']}" for i in lista_carrito])
-            cursor.execute("INSERT INTO ventas (total_usd, total_bs, productos_detalles) VALUES (?, ?, ?)", (subtotal, total_bs, detalle_str))
+            
+            fecha_hora_local = ahora.strftime("%Y-%m-%d %H:%M:%S")
+            
+            cursor.execute("INSERT INTO ventas (fecha_hora, total_usd, total_bs, productos_detalles) VALUES (?, ?, ?, ?)", 
+                           (fecha_hora_local, subtotal, total_bs, detalle_str))
             conexion.commit()
             conexion.close()
             
@@ -546,7 +616,10 @@ async def main(page: ft.Page):
     def cargar_cierre():
         conexion = sqlite3.connect(DB_PATH)
         cursor = conexion.cursor()
-        cursor.execute("SELECT total_usd, total_bs FROM ventas WHERE DATE(fecha_hora) = DATE('now', 'localtime')")
+        
+        fecha_busqueda = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute("SELECT total_usd, total_bs FROM ventas WHERE DATE(fecha_hora) = ?", (fecha_busqueda,))
+        
         ventas = cursor.fetchall()
         conexion.close()
         
