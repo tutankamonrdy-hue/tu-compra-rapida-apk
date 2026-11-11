@@ -25,13 +25,6 @@ tasa_lock = threading.Lock()
 
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
-# === FUENTE PERSONALIZADA (Google Fonts) ===
-def cargar_fuente(page):
-    page.fonts = {
-        "Roboto": "https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff2"
-    }
-    page.theme.font_family = "Roboto"
-
 # === TASA BCV AUTOMÁTICA ROBUSTA ===
 def obtener_tasa_bcv(page, txt_tasa_ui):
     global tasa_del_dia
@@ -247,11 +240,8 @@ async def main(page: ft.Page):
     global tasa_del_dia
     page.title = "Tu Compra Rápida"
     page.theme_mode = ft.ThemeMode.DARK
-    # CORRECCIÓN AQUÍ: Usamos ft.Padding.all() o simplemente un número entero
     page.padding = 10 
     page.spacing = 10
-    
-    cargar_fuente(page)
     
     prefs = ft.SharedPreferences()
     if prefs not in page.services:
