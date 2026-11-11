@@ -247,7 +247,8 @@ async def main(page: ft.Page):
     global tasa_del_dia
     page.title = "Tu Compra Rápida"
     page.theme_mode = ft.ThemeMode.DARK
-    page.padding = ft.padding.all(10)
+    # CORRECCIÓN AQUÍ: Usamos ft.Padding.all() o simplemente un número entero
+    page.padding = 10 
     page.spacing = 10
     
     cargar_fuente(page)
@@ -384,7 +385,7 @@ async def main(page: ft.Page):
                             ft.IconButton(ft.Icons.DELETE, icon_color=ft.Colors.RED_400, on_click=lambda e, i=id_p: eliminar_producto(i))
                         ])
                     ]),
-                    padding=12, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=8, margin=ft.margin.only(bottom=8)
+                    padding=12, border=ft.Border.all(1, ft.Colors.GREY_700), border_radius=8, margin=ft.Margin.only(bottom=8)
                 )
             )
         conexion.close()
@@ -662,7 +663,6 @@ async def main(page: ft.Page):
         txt_cierre.value = f"Ventas de hoy: {len(ventas)}\n\nTotal Recaudado: ${t_usd:.2f}\nTotal Bs: {t_bs:.2f} Bs."
         page.update()
 
-        # Aviso visual (AHORA ESTÁ DENTRO DE LA FUNCIÓN CORRECTAMENTE)
         if e is not None: 
             sb = ft.SnackBar(ft.Text("Datos del cierre actualizados"), bgcolor=ft.Colors.BLUE_700)
             page.overlay.append(sb)
